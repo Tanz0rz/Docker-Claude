@@ -10,7 +10,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
   && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -u 1000 -m -s /bin/bash claude
+RUN apt-get update && apt-get install -y --no-install-recommends sudo \
+  && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -u 1000 -m -s /bin/bash claude \
+  && echo "claude ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/claude
 USER claude
 
 RUN curl -fsSL https://claude.ai/install.sh | bash

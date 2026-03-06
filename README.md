@@ -80,6 +80,36 @@ Then use `cclaude` from any project directory.
 - **SSH keys** — `~/.ssh` mounted read-only for private repo access
 - **Project directory** — Read-write mount of your current directory
 
+## Managing dependencies
+
+The container comes with common dev tools (git, curl, jq, python3, build-essential). When Claude needs something else, there are three approaches:
+
+### 1. Add to the Containerfile (permanent)
+
+For tools you always need, add them to the `apt-get install` line in the Containerfile and rebuild:
+
+```bash
+podman rmi claude-code
+cclaude  # rebuilds with new packages
+```
+
+### 2. Let Claude install at runtime (per-session)
+
+Claude has passwordless sudo inside the container, so it can `sudo apt-get install -y <package>` during a session. These installs are lost when the session ends (`--rm` flag), so this is best for one-off experiments.
+
+### 3. Install to the named volume (persistent, no rebuild)
+
+Tools installed to `/home/claude` (the named volume) persist across sessions. For example, Claude could install Go without a rebuild:
+
+```bash
+curl -fsSL https://go.dev/dl/go1.24.1.linux-arm64.tar.gz | tar -C ~/.local -xz
+echo 'export PATH=$HOME/.local/go/bin:$PATH' >> ~/.bashrc
+```
+
+This works for any tool that supports user-level installation (pip, cargo, npm globals, language version managers, etc.).
+
+> **Note:** sudo inside a rootless Podman container is safe — root in the container maps to your unprivileged UID on the host.
+
 ## Updating Claude Code
 
 The Claude Code binary is baked into the image. To update:
