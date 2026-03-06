@@ -20,4 +20,7 @@ if [ -f /tmp/.host-gitconfig ]; then
   git config --global --unset user.signingkey 2>/dev/null || true
 fi
 
+# Ensure GitHub host key is trusted for SSH operations
+ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null || true
+
 exec claude --dangerously-skip-permissions "$@"
