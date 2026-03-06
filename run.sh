@@ -5,13 +5,13 @@ IMAGE_NAME="claude-code"
 VOLUME_NAME="claude-home"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Prefer podman, fall back to docker
-if command -v podman &>/dev/null; then
-  RUNTIME=podman
-elif command -v docker &>/dev/null; then
+# Prefer docker, fall back to podman
+if command -v docker &>/dev/null; then
   RUNTIME=docker
+elif command -v podman &>/dev/null; then
+  RUNTIME=podman
 else
-  echo "Error: neither podman nor docker found" >&2
+  echo "Error: neither docker nor podman found" >&2
   exit 1
 fi
 
@@ -56,7 +56,7 @@ $RUNTIME run --rm -it \
   --network=bridge \
   "${RUNTIME_FLAGS[@]}" \
   ${HOST_MOUNTS[@]+"${HOST_MOUNTS[@]}"} \
-  -v "$VOLUME_NAME:/home/claude:Z" \
+  -v "$VOLUME_NAME:/home/claude" \
   -v "$(pwd):/workspace" \
   "$IMAGE_NAME" \
   "$@"

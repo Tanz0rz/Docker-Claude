@@ -1,22 +1,28 @@
-# Podman Claude
+# Containerized Claude Code
 
-Run [Claude Code](https://claude.ai) in a rootless Podman container with `--dangerously-skip-permissions` safely isolated from your host system.
+Run [Claude Code](https://claude.ai) in a container with `--dangerously-skip-permissions` safely isolated from your host system.
 
 ## Why
 
 Running Claude Code with `--dangerously-skip-permissions` gives the AI agent full autonomy but also full access to your system. A container restricts it to only the mounted project directory — Claude can't touch anything else on your host.
 
-Podman is preferred over Docker because it runs **rootless by default** — no daemon, no root process, minimal attack surface.
-
 ## Prerequisites
 
+Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) (recommended) or Podman.
+
+**Docker:**
+```bash
+brew install --cask docker
+```
+
+**Podman (alternative):**
 ```bash
 brew install podman
 podman machine init --memory 8192
 podman machine start
 ```
 
-> **Note:** The default 2GB VM memory is insufficient to build the image. 8GB is recommended.
+> **Note on Podman:** Podman's VM on macOS has known issues with socket freezes, requiring periodic `podman machine stop && podman machine start`. The run script includes an automatic health check for this, but Docker is more reliable on macOS. Podman's default 2GB VM memory is also insufficient — 8GB minimum is required.
 
 ## Setup
 
@@ -61,7 +67,7 @@ Then use `cclaude` from any project directory.
 ## How it works
 
 - **Containerfile** — Debian-based image with Node.js 22, Claude Code native binary, and common dev tools (git, curl, jq, python3, build-essential)
-- **run.sh** — Builds the image, creates a persistent volume, and runs the container with your project mounted at `/workspace`
+- **run.sh** — Builds the image, creates a persistent volume, and runs the container with your project mounted at `/workspace`. Auto-detects Docker or Podman.
 - **Named volume** (`claude-home`) — Persists `/home/claude` across runs, including auth tokens, settings, memory, and history
 - **Project mount** — `$(pwd)` is bind-mounted to `/workspace` so Claude can read and edit your code
 
@@ -72,7 +78,7 @@ Then use `cclaude` from any project directory.
 | Filesystem | Protected | Only `/workspace` (your project) is mounted |
 | Processes | Protected | No access to host processes |
 | Network | Protected | Outbound web access only (bridge mode) |
-| Privilege escalation | Protected | Rootless + no capabilities |
+| Privilege escalation | Protected | Capabilities dropped, no-new-privileges |
 
 ## What's shared
 
@@ -89,7 +95,7 @@ The container comes with common dev tools (git, curl, jq, python3, build-essenti
 For tools you always need, add them to the `apt-get install` line in the Containerfile and rebuild:
 
 ```bash
-podman rmi claude-code
+docker rmi claude-code
 cclaude  # rebuilds with new packages
 ```
 
@@ -108,17 +114,24 @@ echo 'export PATH=$HOME/.local/go/bin:$PATH' >> ~/.bashrc
 
 This works for any tool that supports user-level installation (pip, cargo, npm globals, language version managers, etc.).
 
-> **Note:** sudo inside a rootless Podman container is safe — root in the container maps to your unprivileged UID on the host.
+> **Note:** sudo inside the container is safe — `--cap-drop=ALL` and `--security-opt=no-new-privileges` prevent privilege escalation beyond the container.
 
 ## Updating Claude Code
 
 The Claude Code binary is baked into the image. To update:
 
 ```bash
-podman rmi claude-code
+docker rmi claude-code
 cclaude  # rebuilds automatically
 ```
 
-## Docker fallback
+## Docker vs Podman
 
-The run script auto-detects the runtime. If Podman isn't installed, it falls back to Docker with `--cap-drop=ALL --security-opt=no-new-privileges` for hardening.
+The run script auto-detects the runtime, preferring Docker. Both work, with trade-offs:
+
+| | Docker | Podman |
+|---|---|---|
+| macOS stability | Reliable | VM socket freezes (auto-recovered by script) |
+| Daemon | `dockerd` runs as root | Daemonless |
+| Rootless | Requires extra setup | Default |
+| Security hardening | `--cap-drop=ALL --security-opt=no-new-privileges` | `--userns=keep-id` |

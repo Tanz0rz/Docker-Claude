@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN apt-get update && apt-get install -y --no-install-recommends sudo \
   && rm -rf /var/lib/apt/lists/*
 
-RUN useradd -u 1000 -m -s /bin/bash claude \
+RUN useradd -m -s /bin/bash claude \
   && echo "claude ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/claude
 USER claude
 
