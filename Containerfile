@@ -18,16 +18,14 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
   && apt-get update && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
 
-RUN apt-get update && apt-get install -y --no-install-recommends sudo \
-  && rm -rf /var/lib/apt/lists/*
-
-RUN useradd -m -s /bin/bash claude \
-  && echo "claude ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/claude
+RUN useradd -m -s /bin/bash claude
 
 # Trust all /workspace paths so mounted repos work regardless of UID mismatch
 # Use gh CLI as git credential helper (host gh config is mounted read-only)
 RUN git config --system --add safe.directory '*' \
   && git config --system credential.helper '!gh auth git-credential'
+
+COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 USER claude
 
@@ -36,4 +34,4 @@ ENV PATH="/home/claude/.local/bin:${PATH}"
 
 WORKDIR /workspace
 
-ENTRYPOINT ["claude", "--dangerously-skip-permissions"]
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

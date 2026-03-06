@@ -41,10 +41,10 @@ REM Derive workspace path from current directory name
 for %%I in ("%cd%") do set PROJECT_NAME=%%~nxI
 set WORKSPACE_PATH=/workspace/%PROJECT_NAME%
 
-REM Mount host config (read-only)
+REM Mount host config to staging paths (entrypoint copies with correct permissions)
 set HOST_MOUNTS=
-if exist "%USERPROFILE%\.gitconfig" set HOST_MOUNTS=-v %USERPROFILE%\.gitconfig:/home/claude/.gitconfig:ro
-if exist "%USERPROFILE%\.ssh" set HOST_MOUNTS=!HOST_MOUNTS! -v %USERPROFILE%\.ssh:/home/claude/.ssh:ro
+if exist "%USERPROFILE%\.gitconfig" set HOST_MOUNTS=-v %USERPROFILE%\.gitconfig:/tmp/.host-gitconfig:ro
+if exist "%USERPROFILE%\.ssh" set HOST_MOUNTS=!HOST_MOUNTS! -v %USERPROFILE%\.ssh:/tmp/.host-ssh:ro
 if exist "%APPDATA%\GitHub CLI" set HOST_MOUNTS=!HOST_MOUNTS! -v "%APPDATA%\GitHub CLI:/home/claude/.config/gh:ro"
 
 REM Runtime-specific flags
@@ -54,12 +54,4 @@ if "%RUNTIME%"=="podman" (
     set RUNTIME_FLAGS=--cap-drop=ALL --security-opt=no-new-privileges
 )
 
-%RUNTIME% run --rm -it ^
-    --network=bridge ^
-    -w "%WORKSPACE_PATH%" ^
-    %RUNTIME_FLAGS% ^
-    %HOST_MOUNTS% ^
-    -v %VOLUME_NAME%:/home/claude ^
-    -v "%cd%:%WORKSPACE_PATH%" ^
-    %IMAGE_NAME% ^
-    %*
+%RUNTIME% run --rm -it --network=bridge -w "%WORKSPACE_PATH%" %RUNTIME_FLAGS% %HOST_MOUNTS% -v %VOLUME_NAME%:/home/claude -v "%cd%:%WORKSPACE_PATH%" %IMAGE_NAME% %*
