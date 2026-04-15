@@ -53,10 +53,11 @@ WORKSPACE_PATH="/workspace/$PROJECT_NAME"
 HOST_MOUNTS=()
 [ -f "$HOME/.gitconfig" ] && HOST_MOUNTS+=(-v "$HOME/.gitconfig:/tmp/.host-gitconfig:ro")
 [ -d "$HOME/.ssh" ] && HOST_MOUNTS+=(-v "$HOME/.ssh:/tmp/.host-ssh:ro")
-# Ensure host credentials file exists for the shared read-write mount
+# Share the host's .claude directory so OAuth token refreshes (which use atomic
+# writes) persist correctly in both directions.  A directory-level bind mount
+# handles rename() atomicity — file-level mounts and symlinks do not.
 mkdir -p "$HOME/.claude"
-[ ! -f "$HOME/.claude/.credentials.json" ] && echo '{}' > "$HOME/.claude/.credentials.json"
-HOST_MOUNTS+=(-v "$HOME/.claude/.credentials.json:/tmp/.host-credentials.json")
+HOST_MOUNTS+=(-v "$HOME/.claude:/home/claude/.claude")
 [ -d "${XDG_CONFIG_HOME:-$HOME/.config}/gh" ] && HOST_MOUNTS+=(-v "${XDG_CONFIG_HOME:-$HOME/.config}/gh:/home/claude/.config/gh:ro")
 
 # Pass auth environment variables into the container
@@ -64,6 +65,14 @@ ENV_FLAGS=()
 [ -n "${ANTHROPIC_API_KEY:-}" ] && ENV_FLAGS+=(-e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
 [ -n "${CLAUDE_CODE_USE_BEDROCK:-}" ] && ENV_FLAGS+=(-e "CLAUDE_CODE_USE_BEDROCK=$CLAUDE_CODE_USE_BEDROCK")
 [ -n "${CLAUDE_CODE_USE_VERTEX:-}" ] && ENV_FLAGS+=(-e "CLAUDE_CODE_USE_VERTEX=$CLAUDE_CODE_USE_VERTEX")
+# Forward gh auth token so gh works even when the host stores tokens in a
+# system keyring (gnome-keyring, macOS Keychain, etc.) that isn't available
+# inside the container.
+if [ -z "${GH_TOKEN:-}" ] && command -v gh &>/dev/null && gh auth token &>/dev/null; then
+  ENV_FLAGS+=(-e "GH_TOKEN=$(gh auth token)")
+elif [ -n "${GH_TOKEN:-}" ]; then
+  ENV_FLAGS+=(-e "GH_TOKEN=$GH_TOKEN")
+fi
 
 $RUNTIME run --rm -it \
   --network=bridge \

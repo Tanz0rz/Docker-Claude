@@ -36,9 +36,13 @@ fi
 mkdir -p "$CLAUDE_HOME/.claude"
 chown "$CLAUDE_UID:$CLAUDE_GID" "$CLAUDE_HOME/.claude"
 if [ -f /tmp/.host-credentials.json ]; then
+  # Legacy per-file mount (macOS/Windows): symlink to the bind-mounted file.
   chown "$CLAUDE_UID:$CLAUDE_GID" /tmp/.host-credentials.json 2>/dev/null || true
-  # Symlink so all credential writes go directly to the shared host file
   ln -sf /tmp/.host-credentials.json "$CLAUDE_HOME/.claude/.credentials.json"
+elif [ -f "$CLAUDE_HOME/.claude/.credentials.json" ]; then
+  # Directory-level mount (Linux): the host's ~/.claude is mounted directly,
+  # so just fix ownership.
+  chown "$CLAUDE_UID:$CLAUDE_GID" "$CLAUDE_HOME/.claude/.credentials.json" 2>/dev/null || true
 fi
 
 # Ensure GitHub host key is trusted for SSH operations
