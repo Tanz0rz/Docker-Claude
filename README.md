@@ -40,6 +40,8 @@ Pick your OS:
 
 ## Managing dependencies
 
+> The `cclaude` command shown below is a user-defined shortcut for this repo's `run.sh` / `run.bat`. See the [OS-specific guide](#quick-start) for setup (shell alias on macOS/Linux, PATH entry on Windows).
+
 The container comes with common dev tools (git, curl, jq, python3, build-essential). When Claude needs something else, there are two approaches:
 
 ### 1. Add to the Containerfile (permanent)
