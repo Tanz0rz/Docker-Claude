@@ -10,6 +10,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     gpg \
     gosu \
+    libpng16-16 \
+    libturbojpeg0 \
+    libvorbisfile3 \
+    libvorbis0a \
+    libogg0 \
+    libmbedtls14 \
+    libmbedx509-1 \
+    libmbedcrypto7 \
+    libsdl2-2.0-0 \
+    libgl1-mesa-dri \
+    libuv1 \
+    xvfb \
   && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
