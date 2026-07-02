@@ -74,6 +74,26 @@ elif [ -n "${GH_TOKEN:-}" ]; then
   ENV_FLAGS+=(-e "GH_TOKEN=$GH_TOKEN")
 fi
 
+# Share the host's Wayland socket so clipboard image paste (ctrl+v) works.
+# Claude Code reads clipboard images via wl-paste, which needs the compositor
+# socket. X11 hosts are intentionally not wired up: sharing the X11 socket
+# would let the container snoop keystrokes and windows, unlike Wayland where
+# clients are isolated from each other.
+# Skipped entirely on X11-only or headless hosts: the socket must exist or
+# nothing is mounted and no env vars are set.
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+  case "$WAYLAND_DISPLAY" in
+    # WAYLAND_DISPLAY may be an absolute path per the Wayland spec
+    /*) WAYLAND_SOCKET="$WAYLAND_DISPLAY" ;;
+    *)  WAYLAND_SOCKET="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/$WAYLAND_DISPLAY" ;;
+  esac
+  WAYLAND_NAME="$(basename "$WAYLAND_SOCKET")"
+  if [ -S "$WAYLAND_SOCKET" ]; then
+    HOST_MOUNTS+=(-v "$WAYLAND_SOCKET:/run/user/1000/$WAYLAND_NAME")
+    ENV_FLAGS+=(-e "WAYLAND_DISPLAY=$WAYLAND_NAME" -e "XDG_RUNTIME_DIR=/run/user/1000")
+  fi
+fi
+
 $RUNTIME run --rm -it \
   --network=bridge \
   -w "$WORKSPACE_PATH" \

@@ -37,6 +37,7 @@ Pick your OS:
 - **Git config** — Copied from host at startup so commits use your identity
 - **SSH keys** — Copied from host at startup for private repo access
 - **Project directory** — Read-write mount of your current directory
+- **Clipboard (Linux/Wayland only)** — The Wayland compositor socket is mounted so image paste (ctrl+v) works in the TUI
 
 ## Managing dependencies
 
@@ -90,6 +91,7 @@ The container significantly reduces the blast radius of `--dangerously-skip-perm
 - **Read your SSH keys and Git config** — these are mounted read-only, but a rogue agent could still read them and exfiltrate them over the network
 - **Read your GitHub CLI tokens** — the `gh` config directory is mounted read-only for the same reason
 - **Make network requests** — outbound network access is required for the Claude API but also means the container can reach arbitrary endpoints
+- **Read and write your clipboard (Linux/Wayland)** — the Wayland socket is mounted for image paste, which also allows clipboard access and opening windows. Wayland's client isolation prevents input snooping; for this reason the X11 socket (which would allow keylogging) is never mounted. Remove the `WAYLAND_DISPLAY` block in `linux/run.sh` to opt out
 
 ### Hardening tips
 
