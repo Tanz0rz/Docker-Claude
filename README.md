@@ -67,7 +67,20 @@ This works for any tool that supports user-level installation (pip, cargo, npm g
 
 ## Updating Claude Code
 
-The Claude Code binary is baked into the image. To update:
+The Claude Code binary is baked into the image, pinned via the
+`CLAUDE_CODE_VERSION` build arg in the `Containerfile`. The easiest way to
+update is:
+
+```
+cclaude --update
+```
+
+This fetches the latest release, rebuilds the image with it, and then launches
+as usual. (The `--update` flag is consumed by the launcher; all other arguments
+are passed through to Claude Code.)
+
+To pin a specific version instead, bump `CLAUDE_CODE_VERSION` in the
+`Containerfile`, then force a rebuild:
 
 ```
 docker rmi claude-code

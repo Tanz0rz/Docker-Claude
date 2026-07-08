@@ -39,12 +39,25 @@ RUN userdel -r node && useradd -m -s /bin/bash -u 1000 claude
 RUN git config --system --add safe.directory '*' \
   && git config --system credential.helper '!gh auth git-credential'
 
-USER claude
+# Install Claude Code into /opt, OUTSIDE /home/claude. The persistent
+# claude-home volume is mounted over /home/claude at runtime, so anything
+# installed under the home directory is masked by the volume and frozen at
+# whatever version first seeded it — which is why plain rebuilds never updated
+# the binary. Installing into /opt keeps the binary in the image, so
+# `cclaude --update` rebuilds actually take effect.
+#
+# Pin the version so builds are reproducible; bump it (or use `--update`) to
+# re-fetch, since the layer is otherwise cached.
+ARG CLAUDE_CODE_VERSION=2.1.205
+RUN curl -fsSL https://claude.ai/install.sh -o /tmp/claude-install.sh \
+  && HOME=/opt/claude bash /tmp/claude-install.sh "${CLAUDE_CODE_VERSION}" \
+  && rm /tmp/claude-install.sh \
+  && chmod -R a+rX /opt/claude
+ENV PATH="/opt/claude/.local/bin:${PATH}"
+# The image owns the version; disable the native auto-updater so the running
+# binary can't drift into the (persistent) home volume behind our back.
+ENV DISABLE_AUTOUPDATER=1
 
-RUN curl -fsSL https://claude.ai/install.sh | bash
-ENV PATH="/home/claude/.local/bin:${PATH}"
-
-USER root
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 WORKDIR /workspace

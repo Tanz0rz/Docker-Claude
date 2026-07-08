@@ -5,6 +5,18 @@ IMAGE_NAME="claude-code"
 VOLUME_NAME="claude-home"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
+# --update rebuilds the image with the latest Claude Code release before launching
+FORCE_UPDATE=false
+FILTERED_ARGS=()
+for arg in "$@"; do
+  if [ "$arg" = "--update" ]; then
+    FORCE_UPDATE=true
+  else
+    FILTERED_ARGS+=("$arg")
+  fi
+done
+set -- ${FILTERED_ARGS[@]+"${FILTERED_ARGS[@]}"}
+
 # Prefer docker, fall back to podman
 if command -v docker &>/dev/null; then
   RUNTIME=docker
@@ -35,6 +47,16 @@ else
     echo "Please start Docker Desktop and try again." >&2
     exit 1
   fi
+fi
+
+# --update: fetch the latest release and rebuild (the changed build-arg busts the layer cache)
+if [ "$FORCE_UPDATE" = true ]; then
+  echo "Fetching latest Claude Code version..."
+  LATEST_VERSION="$(curl -fsSL https://downloads.claude.ai/claude-code-releases/latest)" \
+    || { echo "Error: could not fetch the latest Claude Code version." >&2; exit 1; }
+  echo "Rebuilding image with Claude Code $LATEST_VERSION..."
+  $RUNTIME build --pull --build-arg "CLAUDE_CODE_VERSION=$LATEST_VERSION" \
+    -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
 fi
 
 # Build if image doesn't exist
@@ -86,6 +108,8 @@ if [ -z "${GH_TOKEN:-}" ] && command -v gh &>/dev/null && gh auth token &>/dev/n
 elif [ -n "${GH_TOKEN:-}" ]; then
   ENV_FLAGS+=(-e "GH_TOKEN=$GH_TOKEN")
 fi
+
+echo "Tip: run 'cclaude --update' to rebuild this image with the latest Claude Code."
 
 $RUNTIME run --rm -it \
   --network=bridge \
