@@ -213,7 +213,7 @@ fi
 
 echo "──────────────────────────────────────────────────────────────"
 echo "  ${_B}Git access:  $GIT_STATUS${_R}"
-echo "               (toggle with GIT_ACCESS=1|0)"
+echo "               (toggle with --git/--no-git)"
 echo "──────────────────────────────────────────────────────────────"
 echo "  Agent:       $AGENT_LABEL   (switch with AGENT=claude|codex)"
 echo "  Auth:        $AUTH_STATUS"
