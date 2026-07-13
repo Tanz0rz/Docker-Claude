@@ -50,20 +50,29 @@ Docker or Podman must be installed before running the installer — see your OS 
 
 ### Launch options
 
-A launch is controlled by two environment variables and a couple of launcher
-flags. The run script prints the resolved config as a banner on startup.
+A launch is controlled by a few launcher options and two environment variables.
+Run `cclaude --help` (or `ccodex --help`) to see them; the run script also prints
+the resolved config as a banner on startup.
 
-**Flags** (passed to `cclaude`/`ccodex`; consumed by the launcher, not the agent):
+**Launcher options** — these must come **before** the agent's arguments. They're
+parsed front-anchored: the first token the launcher doesn't recognize (or a
+literal `--`) ends option parsing, and everything after is forwarded to the agent
+untouched. That's why the launcher's options can never clash with the agent's own
+flags.
 
-| Flag | Effect |
+| Option | Effect |
 |---|---|
 | `--no-git` | Withhold git identity and credentials for this launch (same as `GIT_ACCESS=0`). |
 | `--git` | Force git access on for this launch, overriding the `GIT_ACCESS` env var. |
 | `--update` | Rebuild the image with the latest release of the agent before launching. |
+| `-h`, `--help` | Show the launcher's help. |
+| `--` | Stop parsing launcher options; pass everything after straight to the agent. |
 
 ```bash
 ccodex --no-git                 # Codex, no access to your git credentials
-ccodex --no-git --resume        # flags and agent args mix freely on one line
+ccodex --no-git exec "review"   # launcher opts first, then the agent's args
+ccodex resume --last            # 'resume' ends parsing; both go to Codex
+ccodex -- --help                # reach Codex's own help (see the first line of `ccodex --help`)
 ```
 
 **Environment variables:**
@@ -71,7 +80,7 @@ ccodex --no-git --resume        # flags and agent args mix freely on one line
 | Variable | Default | Effect |
 |---|---|---|
 | `AGENT` | `claude` | Which agent to run: `claude` or `codex`. The `ccodex` launcher just sets `AGENT=codex`. |
-| `GIT_ACCESS` | `1` | Whether the host's git identity and credentials (gitconfig, SSH keys, gh token/config) are shared. Set `0`/`false`/`no`/`off` to withhold them — and scrub any left in the volume by a prior run. A `--git`/`--no-git` flag overrides this. |
+| `GIT_ACCESS` | `1` | Whether the host's git identity and credentials (gitconfig, SSH keys, gh token/config) are shared. Set `0`/`false`/`no`/`off` to withhold them — and scrub any left in the volume by a prior run. A `--git`/`--no-git` option overrides this. |
 
 ## What's isolated
 

@@ -19,24 +19,47 @@ if /i "%AGENT%"=="claude" (
     exit /b 1
 )
 
-REM Launcher flags consumed here (stripped from the args before they reach the
-REM agent):
-REM   --update           rebuild the image with the agent's latest release
-REM   --git / --no-git   force git access on/off for this launch (overrides GIT_ACCESS)
-set RUN_ARGS=%*
+REM Launcher options are parsed front-anchored: only leading --update/--git/
+REM --no-git/--help flags are consumed. The first token we don't recognize (or a
+REM literal --) ends parsing, and the rest is forwarded to the agent untouched,
+REM so the agent's own flags never clash with the launcher's.
 set FORCE_UPDATE=
 set GIT_FLAG=
-if not "%RUN_ARGS%"=="%RUN_ARGS:--update=%" (
-    set FORCE_UPDATE=1
-    set RUN_ARGS=%RUN_ARGS:--update=%
-)
-if not "%RUN_ARGS%"=="%RUN_ARGS:--no-git=%" (
-    set GIT_FLAG=off
-    set RUN_ARGS=%RUN_ARGS:--no-git=%
-)
-if not "%RUN_ARGS%"=="%RUN_ARGS:--git=%" (
-    if not defined GIT_FLAG set GIT_FLAG=on
-    set RUN_ARGS=%RUN_ARGS:--git=%
+set SHOW_HELP=
+set RUN_ARGS=
+:parse_args
+if "%~1"=="" goto parse_done
+if /i "%~1"=="--update" (set FORCE_UPDATE=1& shift& goto parse_args)
+if /i "%~1"=="--git" (set GIT_FLAG=on& shift& goto parse_args)
+if /i "%~1"=="--no-git" (set GIT_FLAG=off& shift& goto parse_args)
+if /i "%~1"=="--help" (set SHOW_HELP=1& goto parse_done)
+if /i "%~1"=="-h" (set SHOW_HELP=1& goto parse_done)
+if "%~1"=="--" (shift& goto collect_args)
+goto collect_args
+:collect_args
+set RUN_ARGS=
+:collect_loop
+if "%~1"=="" goto parse_done
+set RUN_ARGS=!RUN_ARGS! %1
+shift
+goto collect_loop
+:parse_done
+
+REM Wrapper help. First line is the passthrough to the agent's own help, so you
+REM can always reach it; the rest documents the launcher's own options.
+if defined SHOW_HELP (
+    echo For %AGENT_LABEL%'s own help, run:  %LAUNCHER% -- --help
+    echo(
+    echo %LAUNCHER% runs %AGENT_LABEL% in an isolated container ^(see README^).
+    echo Launcher options - must come before the agent's arguments:
+    echo   --no-git     Don't share git identity/credentials for this launch
+    echo   --git        Force git access on ^(overrides the GIT_ACCESS env var^)
+    echo   --update     Rebuild the image with the agent's latest release
+    echo   -h, --help   Show this help
+    echo   --           Stop parsing launcher options; pass the rest to %AGENT_LABEL%
+    echo(
+    echo Env equivalents:  GIT_ACCESS=0^|1   AGENT=claude^|codex
+    exit /b 0
 )
 
 REM GIT_ACCESS controls whether host git identity/credentials (gitconfig, SSH

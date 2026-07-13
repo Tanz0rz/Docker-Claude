@@ -14,23 +14,44 @@ case "$AGENT" in
   *) echo "Error: unknown AGENT '$AGENT' (expected 'claude' or 'codex')" >&2; exit 1 ;;
 esac
 
-# Launcher flags consumed here (stripped from the args before they reach the
-# agent):
-#   --update            rebuild the image with the agent's latest release
-#   --git / --no-git    force git identity/credentials on or off for this launch
-#                       (an explicit flag overrides the GIT_ACCESS env var)
+# Launcher options are parsed front-anchored: only leading --update/--git/
+# --no-git/--help flags are consumed. The first token we don't recognize (or a
+# literal --) ends parsing, and everything after is forwarded to the agent
+# untouched — so the agent's own flags never clash with the launcher's.
 FORCE_UPDATE=false
 GIT_FLAG=""
-FILTERED_ARGS=()
-for arg in "$@"; do
-  case "$arg" in
+SHOW_HELP=false
+while [ $# -gt 0 ]; do
+  case "$1" in
     --update)  FORCE_UPDATE=true ;;
     --git)     GIT_FLAG=true ;;
     --no-git)  GIT_FLAG=false ;;
-    *)         FILTERED_ARGS+=("$arg") ;;
+    -h|--help) SHOW_HELP=true ;;
+    --)        shift; break ;;
+    *)         break ;;
   esac
+  shift
 done
-set -- ${FILTERED_ARGS[@]+"${FILTERED_ARGS[@]}"}
+
+# Wrapper help. First line is the passthrough to the agent's own help, so you
+# can always reach it; the rest documents the launcher's own options.
+if [ "$SHOW_HELP" = true ]; then
+  cat <<EOF
+For $AGENT_LABEL's own help, run:  $LAUNCHER -- --help
+
+$LAUNCHER runs $AGENT_LABEL in an isolated container (see README for details).
+Launcher options — must come before the agent's arguments:
+  --no-git     Don't share git identity/credentials for this launch
+  --git        Force git access on (overrides the GIT_ACCESS env var)
+  --update     Rebuild the image with the agent's latest release, then launch
+  -h, --help   Show this help
+  --           Stop parsing launcher options; pass the rest to $AGENT_LABEL
+
+Anything the launcher doesn't recognize is forwarded to $AGENT_LABEL.
+Env equivalents:  GIT_ACCESS=0|1 (git access)   AGENT=claude|codex (which agent)
+EOF
+  exit 0
+fi
 
 # GIT_ACCESS controls whether the host's git identity and credentials (gitconfig,
 # SSH keys, gh token/config) are shared with the container. Default on; use
