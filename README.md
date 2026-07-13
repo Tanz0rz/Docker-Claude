@@ -10,13 +10,36 @@ Running these agents with their approval gates off (`claude --dangerously-skip-p
 
 ## Quick start
 
-Pick your OS:
+Install [Docker or Podman](#prerequisites-per-os) first, then run the one-line installer.
 
-| OS | Guide | Script |
+**macOS / Linux:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/Tanz0rz/Docker-Claude/main/install.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/Tanz0rz/Docker-Claude/main/install.ps1 | iex
+```
+
+This fetches the repo to a fixed location and installs the `cclaude` (Claude Code) and `ccodex` (Codex CLI) launchers. It does **not** modify your shell config — it prints the one line to add to your PATH so you can decide. (Pass `--modify-path`, or set `DOCKER_CLAUDE_MODIFY_PATH=1`, to have it edit your rc for you.) Once on PATH, from any project directory:
+
+```bash
+cclaude        # launch Claude Code
+ccodex         # launch the Codex CLI
+```
+
+The first launch builds the image and prompts you to `/login`. Re-run the installer any time to update the launchers; use `cclaude --update` / `ccodex --update` to update the agents themselves.
+
+### Prerequisites per OS
+
+Docker or Podman must be installed before running the installer — see your OS guide (each also documents a manual clone-and-alias setup if you'd rather not use the installer):
+
+| OS | Guide | Prerequisite |
 |---|---|---|
-| [macOS](macos/) | [macos/README.md](macos/README.md) | `run.sh` |
-| [Linux](linux/) | [linux/README.md](linux/README.md) | `run.sh` |
-| [Windows](windows/) | [windows/README.md](windows/README.md) | `run.bat` |
+| [macOS](macos/README.md) | [macos/README.md](macos/README.md) | Docker Desktop or Podman |
+| [Linux](linux/README.md) | [linux/README.md](linux/README.md) | Docker or Podman |
+| [Windows](windows/README.md) | [windows/README.md](windows/README.md) | Docker Desktop + WSL 2 |
 
 ## How it works
 
@@ -56,7 +79,7 @@ Example: `GIT_ACCESS=0 ccodex` runs Codex with no access to your git credentials
 
 ## Managing dependencies
 
-> The `cclaude` and `ccodex` commands shown below are user-defined shortcuts for this repo's `run.sh` / `run.bat` (with `ccodex` setting `AGENT=codex`). See the [OS-specific guide](#quick-start) for setup (shell aliases on macOS/Linux, PATH entry on Windows).
+> The `cclaude` and `ccodex` commands are the launchers installed by the [one-line installer](#quick-start) (or set up manually per the OS guide). Both wrap this repo's `run.sh` / `run.bat`, with `ccodex` setting `AGENT=codex`.
 
 The container comes with common dev tools (git, curl, jq, python3, build-essential). When Claude needs something else, there are two approaches:
 

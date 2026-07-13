@@ -12,56 +12,57 @@ wsl --install
 
 Reboot if prompted, then install Docker Desktop. No additional configuration is needed — `run.bat` uses Docker from a normal CMD or PowerShell prompt.
 
-## Setup
+## Install
 
-```cmd
-git clone https://github.com/Tanz0rz/Docker-Claude.git
-cd Docker-Claude
+In PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/Tanz0rz/Docker-Claude/main/install.ps1 | iex
 ```
 
-No extra permissions step is needed on Windows.
+This clones the repo to `%LOCALAPPDATA%\docker-claude` and installs `cclaude.cmd`
+and `ccodex.cmd` launchers under `%LOCALAPPDATA%\docker-claude\bin`. It won't
+modify your PATH — it prints the exact command to add that directory to your
+user PATH so you can run it yourself. (Prefer it automated? Set
+`DOCKER_CLAUDE_MODIFY_PATH=1` before running the installer.) Re-run the command
+any time to update.
 
 ## Usage
 
-From any project directory:
+From any project directory (CMD or PowerShell):
 
 ```cmd
-C:\path\to\Docker-Claude\windows\run.bat
+cclaude        REM launch Claude Code
+ccodex         REM launch the OpenAI Codex CLI
 ```
+
+Both use the same image and persistent volume; `ccodex` just sets `AGENT=codex`
+so the run script starts Codex instead.
 
 On first run, the script will:
 1. Build the container image (takes a few minutes)
 2. Create a persistent `claude-home` volume
-3. Launch Claude Code
+3. Launch the agent
 
 **You must run `/login` inside the container on first launch.** Auth persists in the named volume across all future sessions.
 
-### Pass arguments to Claude
+### Pass arguments to the agent
 
 ```cmd
-C:\path\to\Docker-Claude\windows\run.bat -p "fix the failing tests"
-C:\path\to\Docker-Claude\windows\run.bat --resume
+cclaude -p "fix the failing tests"
+ccodex --resume
 ```
 
-### Adding `cclaude` and `ccodex` to PATH (recommended)
+### Manual setup (without the installer)
 
-Add the `Docker-Claude\windows` directory to your user PATH so you can run both
-launchers from anywhere. `cclaude.cmd` starts Claude Code; `ccodex.cmd` starts
-the OpenAI Codex CLI (same image, same persistent volume — it just sets
-`AGENT=codex`).
+Prefer to wire it up yourself? Clone the repo and add its `windows` directory to
+your user PATH — it already contains `cclaude.cmd` and `ccodex.cmd`:
 
-**PowerShell (one-time):**
 ```powershell
+git clone https://github.com/Tanz0rz/Docker-Claude.git
 $cur = [Environment]::GetEnvironmentVariable('Path', 'User')
 $dir = 'C:\path\to\Docker-Claude\windows'
 [Environment]::SetEnvironmentVariable('Path', "$cur;$dir", 'User')
 ```
 
-Restart your terminal, then use from any project directory:
-
-```cmd
-cclaude
-cclaude -p "fix the failing tests"
-ccodex
-ccodex --resume
-```
+Restart your terminal, then run `cclaude` or `ccodex` from any project directory.
