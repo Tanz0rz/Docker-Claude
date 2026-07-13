@@ -65,15 +65,18 @@ On first run, the script will:
 ~/path/to/Docker-Claude/linux/run.sh --resume
 ```
 
-### Alias (optional)
+### Aliases (optional)
 
 Add to your `~/.bashrc`:
 
 ```bash
 alias cclaude="$HOME/path/to/Docker-Claude/linux/run.sh"
+alias ccodex="AGENT=codex $HOME/path/to/Docker-Claude/linux/run.sh"
 ```
 
-Then use `cclaude` from any project directory.
+Then use `cclaude` to launch Claude Code or `ccodex` to launch the OpenAI Codex
+CLI from any project directory. Both use the same image and persistent volume;
+`ccodex` just sets `AGENT=codex` so the run script starts Codex instead.
 
 ## Docker vs Podman
 

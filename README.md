@@ -1,10 +1,12 @@
-# Containerized Claude Code
+# Containerized Claude Code & Codex
 
-Run [Claude Code](https://claude.ai) in a container with `--dangerously-skip-permissions` safely isolated from your host system.
+Run [Claude Code](https://claude.ai) and the [OpenAI Codex CLI](https://github.com/openai/codex) in a container with their sandbox/approval gates disabled, safely isolated from your host system.
+
+The image bundles **both** agents. Launch Claude Code with `cclaude` and Codex with `ccodex` — same container, same isolation, same persistent home.
 
 ## Why
 
-Running Claude Code with `--dangerously-skip-permissions` gives the AI agent full autonomy but also full access to your system. A container restricts it to only the mounted project directory — Claude can't touch anything else on your host.
+Running these agents with their approval gates off (`claude --dangerously-skip-permissions` / `codex --dangerously-bypass-approvals-and-sandbox`) gives the AI full autonomy but also full access to your system. A container restricts it to only the mounted project directory — the agent can't touch anything else on your host.
 
 ## Quick start
 
@@ -18,10 +20,22 @@ Pick your OS:
 
 ## How it works
 
-- **Containerfile** — Debian-based image with Node.js 22, Claude Code CLI, gh CLI, and common dev tools (git, curl, jq, python3, build-essential)
-- **run.sh / run.bat** — Builds the image, creates a persistent volume, and runs the container with your project mounted at `/workspace`. Each OS directory has its own run script.
-- **Named volume** (`claude-home`) — Persists `/home/claude` across runs, including auth tokens, settings, memory, and history
-- **Project mount** — Your current directory is bind-mounted to `/workspace/<project>` so Claude can read and edit your code
+- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, and common dev tools (git, curl, jq, python3, build-essential)
+- **run.sh / run.bat** — Builds the image, creates a persistent volume, and runs the container with your project mounted at `/workspace`. Each OS directory has its own run script. The `AGENT` env var (set by the `ccodex` launcher) selects which agent runs; it defaults to `claude`.
+- **Named volume** (`claude-home`) — Persists `/home/claude` across runs, including both agents' auth tokens, settings, memory, and history
+- **Project mount** — Your current directory is bind-mounted to `/workspace/<project>` so the agent can read and edit your code
+
+### Launch options
+
+Two environment variables control a launch (the run script prints the resolved
+config as a banner on startup):
+
+| Variable | Default | Effect |
+|---|---|---|
+| `AGENT` | `claude` | Which agent to run: `claude` or `codex`. The `ccodex` launcher just sets `AGENT=codex`. |
+| `GIT_ACCESS` | `1` | Whether the host's git identity and credentials (gitconfig, SSH keys, gh token/config) are shared. Set `0`/`false`/`no`/`off` to withhold them — and scrub any left in the volume by a prior run. |
+
+Example: `GIT_ACCESS=0 ccodex` runs Codex with no access to your git credentials.
 
 ## What's isolated
 
@@ -34,14 +48,15 @@ Pick your OS:
 
 ## What's shared
 
-- **Git config** — Copied from host at startup so commits use your identity
-- **SSH keys** — Copied from host at startup for private repo access
+- **Git config** — Copied from host at startup so commits use your identity (unless `GIT_ACCESS=0`)
+- **SSH keys** — Copied from host at startup for private repo access (unless `GIT_ACCESS=0`)
+- **Auth** — The host's `~/.claude` and `~/.codex` are shared so logins and token refreshes persist in both directions (host and container). `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are forwarded when set. (Agent auth is always shared — it is not affected by `GIT_ACCESS`.)
 - **Project directory** — Read-write mount of your current directory
 - **Clipboard (Linux/Wayland only)** — The Wayland compositor socket is mounted so image paste (ctrl+v) works in the TUI
 
 ## Managing dependencies
 
-> The `cclaude` command shown below is a user-defined shortcut for this repo's `run.sh` / `run.bat`. See the [OS-specific guide](#quick-start) for setup (shell alias on macOS/Linux, PATH entry on Windows).
+> The `cclaude` and `ccodex` commands shown below are user-defined shortcuts for this repo's `run.sh` / `run.bat` (with `ccodex` setting `AGENT=codex`). See the [OS-specific guide](#quick-start) for setup (shell aliases on macOS/Linux, PATH entry on Windows).
 
 The container comes with common dev tools (git, curl, jq, python3, build-essential). When Claude needs something else, there are two approaches:
 
@@ -65,21 +80,22 @@ echo 'export PATH=$HOME/.local/go/bin:$PATH' >> ~/.bashrc
 
 This works for any tool that supports user-level installation (pip, cargo, npm globals, language version managers, etc.).
 
-## Updating Claude Code
+## Updating the agents
 
-The Claude Code binary is baked into the image, pinned via the
-`CLAUDE_CODE_VERSION` build arg in the `Containerfile`. The easiest way to
-update is:
+Both CLIs are baked into the image, pinned via build args in the `Containerfile`
+(`CLAUDE_CODE_VERSION` and `CODEX_VERSION`). The easiest way to update is:
 
 ```
-cclaude --update
+cclaude --update   # rebuild with the latest Claude Code
+ccodex --update    # rebuild with the latest Codex CLI
 ```
 
-This fetches the latest release, rebuilds the image with it, and then launches
-as usual. (The `--update` flag is consumed by the launcher; all other arguments
-are passed through to Claude Code.)
+Each fetches the latest release of that agent, rebuilds the shared image with
+it, and then launches as usual. (The `--update` flag is consumed by the
+launcher; all other arguments are passed through to the agent. Because both
+agents live in one image, either `--update` rebuilds the whole thing.)
 
-To pin a specific version instead, bump `CLAUDE_CODE_VERSION` in the
+To pin a specific version instead, bump the relevant build arg in the
 `Containerfile`, then force a rebuild:
 
 ```
@@ -89,7 +105,7 @@ cclaude  # rebuilds automatically
 
 ## Security model
 
-The container significantly reduces the blast radius of `--dangerously-skip-permissions`, but it is not a perfect sandbox. Understand what is and isn't protected:
+The container significantly reduces the blast radius of running these agents with their approval gates off, but it is not a perfect sandbox. Understand what is and isn't protected:
 
 ### What's protected
 
@@ -109,7 +125,7 @@ The container significantly reduces the blast radius of `--dangerously-skip-perm
 ### Hardening tips
 
 - **Mount the project read-only** for review-only sessions: change the project mount in your run script to `"$(pwd):$WORKSPACE_PATH:ro"`
-- **Skip SSH/GH mounts** if you don't need private repo access: remove or comment out the `HOST_MOUNTS` lines in your run script
+- **Withhold git access** if you don't need private repo access: launch with `GIT_ACCESS=0` (e.g. `GIT_ACCESS=0 cclaude`). No gitconfig, SSH keys, or gh token are shared, and any cached in the volume from a prior run are scrubbed. The launch banner shows whether git access is on or off.
 - **Commit before launching** so you can easily revert any unwanted changes with `git checkout .`
 
 ## Migrating from native Claude Code

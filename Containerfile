@@ -58,6 +58,19 @@ ENV PATH="/opt/claude/.local/bin:${PATH}"
 # binary can't drift into the (persistent) home volume behind our back.
 ENV DISABLE_AUTOUPDATER=1
 
+# Install the OpenAI Codex CLI globally via npm. npm's global prefix is
+# /usr/local (in the image), NOT under /home/claude, so the binary is never
+# masked by the persistent claude-home volume — same reasoning as Claude Code
+# living in /opt. The package pulls a prebuilt native binary for the build
+# platform via optionalDependencies.
+#
+# Pin the version so builds are reproducible; bump it (or use `ccodex --update`)
+# to re-fetch, since the layer is otherwise cached.
+ARG CODEX_VERSION=0.144.1
+RUN npm install -g "@openai/codex@${CODEX_VERSION}" \
+  && chmod -R a+rX /usr/local/lib/node_modules/@openai \
+  && npm cache clean --force
+
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 WORKDIR /workspace

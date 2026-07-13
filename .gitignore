@@ -1,0 +1,2 @@
+# Claude Code per-user local settings (personal permission allowlist, etc.)
+.claude/settings.local.json

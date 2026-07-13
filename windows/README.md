@@ -43,9 +43,12 @@ C:\path\to\Docker-Claude\windows\run.bat -p "fix the failing tests"
 C:\path\to\Docker-Claude\windows\run.bat --resume
 ```
 
-### Adding `cclaude` to PATH (recommended)
+### Adding `cclaude` and `ccodex` to PATH (recommended)
 
-Add the `Docker-Claude\windows` directory to your user PATH so you can run `cclaude` from anywhere:
+Add the `Docker-Claude\windows` directory to your user PATH so you can run both
+launchers from anywhere. `cclaude.cmd` starts Claude Code; `ccodex.cmd` starts
+the OpenAI Codex CLI (same image, same persistent volume — it just sets
+`AGENT=codex`).
 
 **PowerShell (one-time):**
 ```powershell
@@ -59,5 +62,6 @@ Restart your terminal, then use from any project directory:
 ```cmd
 cclaude
 cclaude -p "fix the failing tests"
-cclaude --resume
+ccodex
+ccodex --resume
 ```
