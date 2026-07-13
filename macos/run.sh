@@ -14,13 +14,36 @@ case "$AGENT" in
   *) echo "Error: unknown AGENT '$AGENT' (expected 'claude' or 'codex')" >&2; exit 1 ;;
 esac
 
+# Launcher flags consumed here (stripped from the args before they reach the
+# agent):
+#   --update            rebuild the image with the agent's latest release
+#   --git / --no-git    force git identity/credentials on or off for this launch
+#                       (an explicit flag overrides the GIT_ACCESS env var)
+FORCE_UPDATE=false
+GIT_FLAG=""
+FILTERED_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --update)  FORCE_UPDATE=true ;;
+    --git)     GIT_FLAG=true ;;
+    --no-git)  GIT_FLAG=false ;;
+    *)         FILTERED_ARGS+=("$arg") ;;
+  esac
+done
+set -- ${FILTERED_ARGS[@]+"${FILTERED_ARGS[@]}"}
+
 # GIT_ACCESS controls whether the host's git identity and credentials (gitconfig,
-# SSH keys, gh token/config) are shared with the container. Default on; set
-# GIT_ACCESS=0 (or false/no/off) for review-only sessions on untrusted code.
-case "${GIT_ACCESS:-1}" in
-  0|false|no|off|FALSE|NO|OFF) GIT_ACCESS=false ;;
-  *) GIT_ACCESS=true ;;
-esac
+# SSH keys, gh token/config) are shared with the container. Default on; use
+# --no-git (or GIT_ACCESS=0/false/no/off) for review-only sessions on untrusted
+# code. A --git/--no-git flag takes precedence over the GIT_ACCESS env var.
+if [ -n "$GIT_FLAG" ]; then
+  GIT_ACCESS="$GIT_FLAG"
+else
+  case "${GIT_ACCESS:-1}" in
+    0|false|no|off|FALSE|NO|OFF) GIT_ACCESS=false ;;
+    *) GIT_ACCESS=true ;;
+  esac
+fi
 
 # Colorize the banner when stdout is a terminal (plain text when piped/redirected).
 if [ -t 1 ]; then
@@ -36,18 +59,6 @@ if [ "$GIT_ACCESS" = true ]; then
 else
   GIT_STATUS="${_B}${_GRN}OFF${_R} — no git identity or credentials"
 fi
-
-# --update rebuilds the image with the latest release of the selected agent before launching
-FORCE_UPDATE=false
-FILTERED_ARGS=()
-for arg in "$@"; do
-  if [ "$arg" = "--update" ]; then
-    FORCE_UPDATE=true
-  else
-    FILTERED_ARGS+=("$arg")
-  fi
-done
-set -- ${FILTERED_ARGS[@]+"${FILTERED_ARGS[@]}"}
 
 # Prefer docker, fall back to podman
 if command -v docker &>/dev/null; then

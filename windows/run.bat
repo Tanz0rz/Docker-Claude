@@ -19,29 +19,46 @@ if /i "%AGENT%"=="claude" (
     exit /b 1
 )
 
+REM Launcher flags consumed here (stripped from the args before they reach the
+REM agent):
+REM   --update           rebuild the image with the agent's latest release
+REM   --git / --no-git   force git access on/off for this launch (overrides GIT_ACCESS)
+set RUN_ARGS=%*
+set FORCE_UPDATE=
+set GIT_FLAG=
+if not "%RUN_ARGS%"=="%RUN_ARGS:--update=%" (
+    set FORCE_UPDATE=1
+    set RUN_ARGS=%RUN_ARGS:--update=%
+)
+if not "%RUN_ARGS%"=="%RUN_ARGS:--no-git=%" (
+    set GIT_FLAG=off
+    set RUN_ARGS=%RUN_ARGS:--no-git=%
+)
+if not "%RUN_ARGS%"=="%RUN_ARGS:--git=%" (
+    if not defined GIT_FLAG set GIT_FLAG=on
+    set RUN_ARGS=%RUN_ARGS:--git=%
+)
+
 REM GIT_ACCESS controls whether host git identity/credentials (gitconfig, SSH
-REM keys, gh config) are shared with the container. Default on; set GIT_ACCESS=0
-REM (or false/no/off) for review-only sessions on untrusted code.
+REM keys, gh config) are shared with the container. Default on; use --no-git (or
+REM GIT_ACCESS=0/false/no/off) for review-only sessions on untrusted code. A
+REM --git/--no-git flag takes precedence over the GIT_ACCESS env var.
 if not defined GIT_ACCESS set GIT_ACCESS=1
-set GIT_ACCESS_ON=1
-if /i "%GIT_ACCESS%"=="0" set GIT_ACCESS_ON=
-if /i "%GIT_ACCESS%"=="false" set GIT_ACCESS_ON=
-if /i "%GIT_ACCESS%"=="no" set GIT_ACCESS_ON=
-if /i "%GIT_ACCESS%"=="off" set GIT_ACCESS_ON=
+if defined GIT_FLAG (
+    if /i "%GIT_FLAG%"=="off" ( set GIT_ACCESS_ON= ) else ( set GIT_ACCESS_ON=1 )
+) else (
+    set GIT_ACCESS_ON=1
+    if /i "%GIT_ACCESS%"=="0" set GIT_ACCESS_ON=
+    if /i "%GIT_ACCESS%"=="false" set GIT_ACCESS_ON=
+    if /i "%GIT_ACCESS%"=="no" set GIT_ACCESS_ON=
+    if /i "%GIT_ACCESS%"=="off" set GIT_ACCESS_ON=
+)
 if defined GIT_ACCESS_ON (
     set GIT_ACCESS_VALUE=true
     set GIT_STATUS=ON  - gitconfig, SSH keys, gh token shared
 ) else (
     set GIT_ACCESS_VALUE=false
     set GIT_STATUS=OFF - no git identity or credentials
-)
-
-REM --update rebuilds the image with the selected agent's latest release before launching
-set RUN_ARGS=%*
-set FORCE_UPDATE=
-if not "%RUN_ARGS%"=="%RUN_ARGS:--update=%" (
-    set FORCE_UPDATE=1
-    set RUN_ARGS=%RUN_ARGS:--update=%
 )
 
 REM Prefer docker, fall back to podman

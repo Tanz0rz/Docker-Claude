@@ -50,15 +50,28 @@ Docker or Podman must be installed before running the installer — see your OS 
 
 ### Launch options
 
-Two environment variables control a launch (the run script prints the resolved
-config as a banner on startup):
+A launch is controlled by two environment variables and a couple of launcher
+flags. The run script prints the resolved config as a banner on startup.
+
+**Flags** (passed to `cclaude`/`ccodex`; consumed by the launcher, not the agent):
+
+| Flag | Effect |
+|---|---|
+| `--no-git` | Withhold git identity and credentials for this launch (same as `GIT_ACCESS=0`). |
+| `--git` | Force git access on for this launch, overriding the `GIT_ACCESS` env var. |
+| `--update` | Rebuild the image with the latest release of the agent before launching. |
+
+```bash
+ccodex --no-git                 # Codex, no access to your git credentials
+ccodex --no-git --resume        # flags and agent args mix freely on one line
+```
+
+**Environment variables:**
 
 | Variable | Default | Effect |
 |---|---|---|
 | `AGENT` | `claude` | Which agent to run: `claude` or `codex`. The `ccodex` launcher just sets `AGENT=codex`. |
-| `GIT_ACCESS` | `1` | Whether the host's git identity and credentials (gitconfig, SSH keys, gh token/config) are shared. Set `0`/`false`/`no`/`off` to withhold them — and scrub any left in the volume by a prior run. |
-
-Example: `GIT_ACCESS=0 ccodex` runs Codex with no access to your git credentials.
+| `GIT_ACCESS` | `1` | Whether the host's git identity and credentials (gitconfig, SSH keys, gh token/config) are shared. Set `0`/`false`/`no`/`off` to withhold them — and scrub any left in the volume by a prior run. A `--git`/`--no-git` flag overrides this. |
 
 ## What's isolated
 
@@ -148,7 +161,7 @@ The container significantly reduces the blast radius of running these agents wit
 ### Hardening tips
 
 - **Mount the project read-only** for review-only sessions: change the project mount in your run script to `"$(pwd):$WORKSPACE_PATH:ro"`
-- **Withhold git access** if you don't need private repo access: launch with `GIT_ACCESS=0` (e.g. `GIT_ACCESS=0 cclaude`). No gitconfig, SSH keys, or gh token are shared, and any cached in the volume from a prior run are scrubbed. The launch banner shows whether git access is on or off.
+- **Withhold git access** if you don't need private repo access: launch with `--no-git` (e.g. `cclaude --no-git`, or the equivalent `GIT_ACCESS=0 cclaude`). No gitconfig, SSH keys, or gh token are shared, and any cached in the volume from a prior run are scrubbed. The launch banner shows whether git access is on or off.
 - **Commit before launching** so you can easily revert any unwanted changes with `git checkout .`
 
 ## Migrating from native Claude Code
