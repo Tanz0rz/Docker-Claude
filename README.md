@@ -43,7 +43,7 @@ Docker or Podman must be installed before running the installer — see your OS 
 
 ## How it works
 
-- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, and common dev tools (git, curl, jq, python3, build-essential)
+- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, common dev tools (git, curl, jq, python3, build-essential), and the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) game framework (see [Haxe & HaxeFlixel](#haxe--haxeflixel))
 - **run.sh / run.bat** — Builds the image, creates a persistent volume, and runs the container with your project mounted at `/workspace`. Each OS directory has its own run script. The `AGENT` env var (set by the `ccodex` launcher) selects which agent runs; it defaults to `claude`.
 - **Named volume** (`claude-home`) — Persists `/home/claude` across runs, including both agents' auth tokens, settings, memory, and history
 - **Project mount** — Your current directory is bind-mounted to `/workspace/<project>` so the agent can read and edit your code
@@ -98,6 +98,22 @@ ccodex -- --help                # reach Codex's own help (see the first line of 
 - **Auth** — The host's `~/.claude` and `~/.codex` are shared so logins and token refreshes persist in both directions (host and container). `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are forwarded when set. (Agent auth is always shared — it is not affected by `GIT_ACCESS`.)
 - **Project directory** — Read-write mount of your current directory
 - **Clipboard (Linux/Wayland only)** — The Wayland compositor socket is mounted so image paste (ctrl+v) works in the TUI
+
+## Haxe & HaxeFlixel
+
+The image ships the [Haxe](https://haxe.org) toolchain and the [HaxeFlixel](https://haxeflixel.com) game framework so agents can build and run 2D games out of the box:
+
+- **Haxe 4.3.7** and **Neko 2.4.1** — installed under `/opt/haxe` and `/opt/neko` and on `PATH` (`haxe`, `haxelib`, `neko`)
+- **HaxeFlixel stack** — `lime`, `openfl`, `flixel`, `flixel-addons`, `flixel-ui`, `flixel-tools`, and `hxcpp` for native C++ builds, plus a `lime` command
+- **Native runtime** — SDL2, OpenGL (Mesa), vorbis/ogg, and mbedtls are already in the image, and `xvfb` is included so a game can run headless (`xvfb-run lime test linux`)
+
+The Haxe and Neko versions are pinned via the `HAXE_VERSION` / `NEKO_VERSION` build args (bump them and rebuild to upgrade). The haxelib repository lives at `/opt/haxelib` and is read-only so the image stays reproducible — to add or update libraries for a specific project, run `haxelib newrepo` in that project first to create a local, writable `.haxelib`.
+
+```bash
+lime create flixel:FlxTemplate MyGame   # scaffold a new game
+cd MyGame
+lime test neko                          # build & run (or 'linux' for native, under xvfb-run)
+```
 
 ## Managing dependencies
 
