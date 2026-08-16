@@ -43,7 +43,7 @@ Docker or Podman must be installed before running the installer — see your OS 
 
 ## How it works
 
-- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, common dev tools (git, curl, jq, python3, build-essential), and the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) game framework (see [Haxe & HaxeFlixel](#haxe--haxeflixel))
+- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, common dev tools (git, curl, jq, python3, build-essential), the [Go](https://go.dev) toolchain and [Ruff](https://docs.astral.sh/ruff/) (see [Go & Ruff](#go--ruff)), and the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) game framework (see [Haxe & HaxeFlixel](#haxe--haxeflixel))
 - **run.sh / run.bat** — Builds the image, creates a persistent volume, and runs the container with your project mounted at `/workspace`. Each OS directory has its own run script. The `AGENT` env var (set by the `ccodex` launcher) selects which agent runs; it defaults to `claude`.
 - **Named volume** (`claude-home`) — Persists `/home/claude` across runs, including both agents' auth tokens, settings, memory, and history
 - **Project mount** — Your current directory is bind-mounted to `/workspace/<project>` so the agent can read and edit your code
@@ -99,6 +99,15 @@ ccodex -- --help                # reach Codex's own help (see the first line of 
 - **Project directory** — Read-write mount of your current directory
 - **Clipboard (Linux/Wayland only)** — The Wayland compositor socket is mounted so image paste (ctrl+v) works in the TUI
 
+## Go & Ruff
+
+- **Go 1.26.6** — installed at `/opt/go` and on `PATH` (`go`, `gofmt`)
+- **Ruff 0.16.3** — the Python linter/formatter, installed at `/opt/ruff` and linked into `/usr/local/bin/ruff`
+
+Both are pinned via the `GO_VERSION` / `RUFF_VERSION` build args; bump them and rebuild (`docker rmi claude-code && cclaude`) to upgrade. They live in `/opt` rather than the home directory so the persistent `claude-home` volume can't mask or freeze them — the same reasoning as the agents themselves.
+
+`GOPATH` and the module cache stay at their defaults under `~/go`, which *is* on the persistent volume, so downloaded modules and build cache survive across sessions. `GOTOOLCHAIN=local` is set so a project's `go.mod` can't silently pull a different Go toolchain; unset it in the Containerfile if you want Go's auto-upgrade behavior.
+
 ## Haxe & HaxeFlixel
 
 The image ships the [Haxe](https://haxe.org) toolchain and the [HaxeFlixel](https://haxeflixel.com) game framework so agents can build and run 2D games out of the box:
@@ -119,7 +128,7 @@ lime test neko                          # build & run (or 'linux' for native, un
 
 > The `cclaude` and `ccodex` commands are the launchers installed by the [one-line installer](#quick-start) (or set up manually per the OS guide). Both wrap this repo's `run.sh` / `run.bat`, with `ccodex` setting `AGENT=codex`.
 
-The container comes with common dev tools (git, curl, jq, python3, build-essential). When Claude needs something else, there are two approaches:
+The container comes with common dev tools (git, curl, jq, python3, build-essential, Go, Ruff, Haxe). When Claude needs something else, there are two approaches:
 
 ### 1. Add to the Containerfile (permanent)
 
@@ -132,11 +141,10 @@ cclaude  # rebuilds with new packages
 
 ### 2. Install to the named volume (persistent, no rebuild)
 
-Tools installed to `/home/claude` (the named volume) persist across sessions. For example, Claude could install Go without a rebuild:
+Tools installed to `/home/claude` (the named volume) persist across sessions. For example, Claude could install Rust without a rebuild:
 
 ```bash
-curl -fsSL https://go.dev/dl/go1.24.1.linux-arm64.tar.gz | tar -C ~/.local -xz
-echo 'export PATH=$HOME/.local/go/bin:$PATH' >> ~/.bashrc
+curl -fsSL https://sh.rustup.rs | sh -s -- -y   # installs into ~/.cargo, on the volume
 ```
 
 This works for any tool that supports user-level installation (pip, cargo, npm globals, language version managers, etc.).

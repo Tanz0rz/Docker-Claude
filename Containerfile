@@ -129,6 +129,44 @@ RUN set -eux; \
     haxelib install hxcpp --always --quiet; \
     chmod -R a+rX /opt/neko /opt/haxe /opt/haxelib
 
+# Install the Go toolchain and Ruff (the Python linter/formatter). Both are
+# single self-contained trees, so they land in /opt — image-owned and OUTSIDE
+# /home/claude — for the same reason everything else above does: the persistent
+# claude-home volume is mounted over /home/claude at runtime and would mask or
+# freeze anything installed under the home directory.
+#
+# Pin the versions so builds are reproducible; bump them and rebuild to upgrade,
+# since the layer is otherwise cached.
+#
+# GOPATH/GOMODCACHE are left at their defaults (~/go), which lives in the
+# persistent volume — so downloaded modules and build cache survive across runs
+# while the toolchain itself stays owned by the image. GOTOOLCHAIN=local keeps a
+# project's go.mod from silently downloading a different toolchain behind our back;
+# drop it if you want the Go 1.21+ auto-upgrade behavior.
+ARG GO_VERSION=1.26.6
+ARG RUFF_VERSION=0.16.3
+ENV GOTOOLCHAIN=local
+ENV PATH="/opt/go/bin:${PATH}"
+RUN set -eux; \
+    dpkgArch="$(dpkg --print-architecture)"; \
+    case "$dpkgArch" in \
+      amd64) goArch='amd64'; ruffArch='x86_64-unknown-linux-gnu' ;; \
+      arm64) goArch='arm64'; ruffArch='aarch64-unknown-linux-gnu' ;; \
+      *) echo "unsupported architecture: $dpkgArch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/go.tar.gz \
+      "https://go.dev/dl/go${GO_VERSION}.linux-${goArch}.tar.gz"; \
+    tar -xzf /tmp/go.tar.gz -C /opt; \
+    mkdir -p /opt/ruff; \
+    curl -fsSL -o /tmp/ruff.tar.gz \
+      "https://github.com/astral-sh/ruff/releases/download/${RUFF_VERSION}/ruff-${ruffArch}.tar.gz"; \
+    tar -xzf /tmp/ruff.tar.gz -C /opt/ruff --strip-components=1; \
+    ln -s /opt/ruff/ruff /usr/local/bin/ruff; \
+    rm -f /tmp/go.tar.gz /tmp/ruff.tar.gz; \
+    chmod -R a+rX /opt/go /opt/ruff; \
+    go version; \
+    ruff --version
+
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
 WORKDIR /workspace
