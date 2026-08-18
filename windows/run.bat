@@ -171,6 +171,17 @@ set ENV_FLAGS=-e CONTAINER_AGENT=%AGENT% -e GIT_ACCESS=%GIT_ACCESS_VALUE%
 if defined ANTHROPIC_API_KEY set ENV_FLAGS=!ENV_FLAGS! -e ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%
 if defined OPENAI_API_KEY set ENV_FLAGS=!ENV_FLAGS! -e OPENAI_API_KEY=%OPENAI_API_KEY%
 
+REM Forward gh auth token so gh works even when the host stores tokens in the
+REM Windows Credential Manager, which isn't available inside the container.
+REM Withheld when GIT_ACCESS is off.
+if defined GIT_ACCESS_ON (
+    if defined GH_TOKEN (
+        set ENV_FLAGS=!ENV_FLAGS! -e GH_TOKEN=!GH_TOKEN!
+    ) else (
+        where gh >nul 2>nul && for /f "delims=" %%T in ('gh auth token 2^>nul') do set ENV_FLAGS=!ENV_FLAGS! -e GH_TOKEN=%%T
+    )
+)
+
 REM Runtime-specific flags
 if "%RUNTIME%"=="podman" (
     set RUNTIME_FLAGS=--userns=keep-id
