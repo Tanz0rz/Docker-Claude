@@ -25,7 +25,9 @@ and `ccodex.cmd` launchers under `%LOCALAPPDATA%\docker-claude\bin`. It won't
 modify your PATH — it prints the exact command to add that directory to your
 user PATH so you can run it yourself. (Prefer it automated? Set
 `DOCKER_CLAUDE_MODIFY_PATH=1` before running the installer.) Re-run the command
-any time to update.
+any time to reinstall the launchers — day to day you won't need to, because
+`cclaude --update` pulls the latest image sources and agent release itself (see
+[Updating](../README.md#updating)).
 
 ## Usage
 

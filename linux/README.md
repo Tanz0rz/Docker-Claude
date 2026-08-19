@@ -45,7 +45,10 @@ This clones the repo to `~/.local/share/docker-claude` and installs `cclaude`
 and `ccodex` launchers in `~/.local/bin`. It won't touch your shell config — it
 prints the exact line to add `~/.local/bin` to your PATH so you can add it
 yourself. (Prefer it automated? Re-run with `--modify-path`, or set
-`DOCKER_CLAUDE_MODIFY_PATH=1`.) Re-run the command any time to update.
+`DOCKER_CLAUDE_MODIFY_PATH=1`.) Re-run the command any time to reinstall the
+launchers — day to day you won't need to, because `cclaude --update` pulls the
+latest image sources and agent release itself (see
+[Updating](../README.md#updating)).
 
 ## Usage
 

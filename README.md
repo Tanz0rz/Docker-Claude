@@ -171,11 +171,23 @@ The container comes with common dev tools (git, curl, jq, python3, build-essenti
 
 ### 1. Add to the Containerfile (permanent)
 
-For tools you always need, add them to the `apt-get install` line in the Containerfile and rebuild:
+For tools you always need, add them to the Containerfile — the `apt-get install` line for a Debian package, or a new `/opt` layer for a self-contained toolchain (the Go and Haxe layers are worked examples).
+
+The step that trips people up: **the launchers build from their own checkout, not from whichever clone you edited.** Under the installer that is `~/.local/share/docker-claude` (`%LOCALAPPDATA%\docker-claude` on Windows). An edit anywhere else is invisible to the build. So the normal loop is to push the change and let `--update` fetch it back:
 
 ```
-docker rmi claude-code
-cclaude  # rebuilds with new packages
+git commit -am "Add <tool> to the image"
+git push
+cclaude --update   # pulls the change, rebuilds, launches
+```
+
+That is also the path every other machine takes to get the tool, which is reason enough to use it yourself rather than building by hand.
+
+To iterate without pushing, build the image straight from your working copy and launch *without* `--update` — which would otherwise rebuild from the managed checkout and throw your build away:
+
+```
+docker build -t claude-code -f Containerfile .
+cclaude   # no --update; reuses the image you just built
 ```
 
 ### 2. Install to the named volume (persistent, no rebuild)
@@ -221,6 +233,16 @@ ccodex --update    # rebuild with the latest Codex CLI
 Then it rebuilds and launches as usual. (The `--update` flag is consumed by the
 launcher; all other arguments are passed through to the agent. Because both
 agents live in one image, either `--update` rebuilds the whole thing.)
+
+Only the flagged agent's version is bumped, though: `cclaude --update` moves
+`CLAUDE_CODE_VERSION` to the latest release and leaves Codex at whatever the
+`Containerfile` pins, and `ccodex --update` does the reverse. Run both to move
+both.
+
+If the build fails, the launcher stops there rather than starting the image that
+is still tagged. A failed rebuild would otherwise hand you the *previous* image
+with the build error already scrolled off screen — an agent missing the tool you
+just added, and nothing on screen connecting the two.
 
 The checkout is only ever *fast-forwarded*, and only when it is clean and tracks
 an upstream branch — a working clone with local commits or uncommitted edits is
