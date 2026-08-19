@@ -43,7 +43,7 @@ $LAUNCHER runs $AGENT_LABEL in an isolated container (see README for details).
 Launcher options — must come before the agent's arguments:
   --no-git     Don't share git identity/credentials for this launch
   --git        Force git access on (overrides the GIT_ACCESS env var)
-  --update     Rebuild the image with the agent's latest release, then launch
+  --update     Pull the latest launcher source and agent release, then rebuild
   -h, --help   Show this help
   --           Stop parsing launcher options; pass the rest to $AGENT_LABEL
 
@@ -100,8 +100,62 @@ if ! $RUNTIME info &>/dev/null; then
   exit 1
 fi
 
-# --update: fetch the latest release and rebuild (the changed build-arg busts the layer cache)
+# --update refreshes two things before rebuilding: the launcher's own source
+# tree, and the agent release pinned into the image.
+#
+# The source half is the non-obvious one. The build context is $SCRIPT_DIR — the
+# checkout this script lives in, which under the installer is
+# ~/.local/share/docker-claude and is *not* whatever clone you may be editing
+# elsewhere. Without this step, --update faithfully rebuilds a months-old
+# Containerfile with a newer agent pinned into it: the agent moves, every
+# toolchain in the image stays frozen, and nothing on screen says why.
+#
+# It only ever fast-forwards, and only a clean checkout that tracks an upstream:
+# this may well be someone's working clone, and an update flag must never discard
+# their commits or edits. Every reason for skipping is printed, because "did not
+# update" is precisely the state that must not pass silently.
+update_source() {
+  local upstream before after
+  if ! command -v git &>/dev/null; then
+    echo "Source: git not found — building $SCRIPT_DIR as it stands."
+    return
+  fi
+  if [ ! -e "$SCRIPT_DIR/.git" ]; then
+    echo "Source: $SCRIPT_DIR is not a git checkout — building it as it stands."
+    return
+  fi
+  if [ -n "$(git -C "$SCRIPT_DIR" status --porcelain 2>/dev/null)" ]; then
+    echo "Source: $SCRIPT_DIR has uncommitted changes — building those, not pulling."
+    return
+  fi
+  upstream="$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)" || upstream=""
+  if [ -z "$upstream" ]; then
+    echo "Source: $SCRIPT_DIR tracks no upstream branch — building it as it stands."
+    return
+  fi
+  echo "Updating launcher source in $SCRIPT_DIR ($upstream)..."
+  before="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+  # GIT_TERMINAL_PROMPT=0 so a repo that has become private (or a token that has
+  # expired) fails immediately instead of hanging the launcher on a credential
+  # prompt nobody expects from `cclaude --update`.
+  if ! GIT_TERMINAL_PROMPT=0 git -C "$SCRIPT_DIR" pull --ff-only --quiet; then
+    echo "Warning: $SCRIPT_DIR could not be fast-forwarded onto $upstream." >&2
+    echo "         Building the checkout as it stands — reconcile it with git to pick up newer changes." >&2
+    return
+  fi
+  after="$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+  if [ "$before" = "$after" ]; then
+    echo "Source: already current ($after)."
+  else
+    echo "Source: updated $before -> $after."
+  fi
+}
+
+# --update: refresh the source, fetch the latest agent release, then rebuild.
+# The changed build-arg busts the agent layer; any source change busts whichever
+# layer it belongs to, further up.
 if [ "$FORCE_UPDATE" = true ]; then
+  update_source
   if [ "$AGENT" = "codex" ]; then
     echo "Fetching latest Codex CLI version..."
     LATEST_VERSION="$(curl -fsSL https://registry.npmjs.org/@openai/codex/latest \
@@ -240,7 +294,7 @@ echo "  Auth:        $AUTH_STATUS"
 echo "  Clipboard:   $CLIPBOARD_STATUS"
 echo "  Workspace:   $(pwd) -> $WORKSPACE_PATH"
 echo "  Home volume: $VOLUME_NAME (persistent)"
-echo "  Update:      $LAUNCHER --update   rebuilds with the latest release"
+echo "  Update:      $LAUNCHER --update   pulls the latest source + release, rebuilds"
 echo "──────────────────────────────────────────────────────────────"
 
 $RUNTIME run --rm -it \

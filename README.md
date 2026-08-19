@@ -29,7 +29,7 @@ cclaude        # launch Claude Code
 ccodex         # launch the Codex CLI
 ```
 
-The first launch builds the image and prompts you to `/login`. Re-run the installer any time to update the launchers; use `cclaude --update` / `ccodex --update` to update the agents themselves.
+The first launch builds the image and prompts you to `/login`. After that, `cclaude --update` / `ccodex --update` keeps everything current — it pulls the latest launcher source *and* the latest agent release, then rebuilds. Re-running the installer is only needed if the launcher shims themselves change.
 
 ### Prerequisites per OS
 
@@ -64,7 +64,7 @@ flags.
 |---|---|
 | `--no-git` | Withhold git identity and credentials for this launch (same as `GIT_ACCESS=0`). |
 | `--git` | Force git access on for this launch, overriding the `GIT_ACCESS` env var. |
-| `--update` | Rebuild the image with the latest release of the agent before launching. |
+| `--update` | Pull the latest launcher source and agent release, rebuild the image, then launch. |
 | `-h`, `--help` | Show the launcher's help. |
 | `--` | Stop parsing launcher options; pass everything after straight to the agent. |
 
@@ -198,20 +198,34 @@ The conventional user-level bin directories are already on `PATH`, so a tool ins
 
 This matters because the agent is `exec`'d directly rather than through a login shell: the `source ~/.profile` line installers like rustup append to your shell config is never read, so without those entries the binaries would be invisible despite installing fine. They are appended *after* the image's own directories, so an image-owned tool always wins over a stale copy in the volume.
 
-## Updating the agents
+## Updating
 
 Both CLIs are baked into the image, pinned via build args in the `Containerfile`
-(`CLAUDE_CODE_VERSION` and `CODEX_VERSION`). The easiest way to update is:
+(`CLAUDE_CODE_VERSION` and `CODEX_VERSION`). One command updates everything:
 
 ```
 cclaude --update   # rebuild with the latest Claude Code
 ccodex --update    # rebuild with the latest Codex CLI
 ```
 
-Each fetches the latest release of that agent, rebuilds the shared image with
-it, and then launches as usual. (The `--update` flag is consumed by the
+`--update` does two things before rebuilding, and the first one is easy to miss:
+
+1. **Fast-forwards the launcher's own checkout** — the directory the run script
+   lives in, which is also the build context. Under the installer that is
+   `~/.local/share/docker-claude` (`%LOCALAPPDATA%\docker-claude` on Windows),
+   *not* any clone you happen to be editing elsewhere. This is what carries
+   changes to the `Containerfile` and `entrypoint.sh` — new tools, bumped
+   versions, environment fixes — into the image.
+2. **Fetches the latest release of that agent** and pins it into the build.
+
+Then it rebuilds and launches as usual. (The `--update` flag is consumed by the
 launcher; all other arguments are passed through to the agent. Because both
 agents live in one image, either `--update` rebuilds the whole thing.)
+
+The checkout is only ever *fast-forwarded*, and only when it is clean and tracks
+an upstream branch — a working clone with local commits or uncommitted edits is
+built as it stands, never rewound. Whichever happens is printed at launch, so
+"did not update" is never silent.
 
 To pin a specific version instead, bump the relevant build arg in the
 `Containerfile`, then force a rebuild:
@@ -221,12 +235,11 @@ docker rmi claude-code
 cclaude  # rebuilds automatically
 ```
 
-The same two commands are how any *other* change to the `Containerfile` or
-`entrypoint.sh` reaches a running setup — a new tool, a bumped `GO_VERSION`, a
-fix to the environment. The launchers only build when the image is missing, so
-an existing `claude-code` image keeps being reused, however old it is, until you
-remove it or pass `--update`. If a tool this README documents appears to be
-missing inside the container, an image predating it is the first thing to check:
+That pair is also the escape hatch when you are developing against a checkout
+`--update` won't touch: the launchers otherwise build only when the image is
+missing, so an existing `claude-code` image keeps being reused, however old it
+is. If a tool this README documents appears to be missing inside the container,
+an image predating it is the first thing to check:
 `docker image inspect claude-code --format '{{.Created}}'`.
 
 ## Security model

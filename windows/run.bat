@@ -54,7 +54,7 @@ if defined SHOW_HELP (
     echo Launcher options - must come before the agent's arguments:
     echo   --no-git     Don't share git identity/credentials for this launch
     echo   --git        Force git access on ^(overrides the GIT_ACCESS env var^)
-    echo   --update     Rebuild the image with the agent's latest release
+    echo   --update     Pull the latest launcher source and agent release, then rebuild
     echo   -h, --help   Show this help
     echo   --           Stop parsing launcher options; pass the rest to %AGENT_LABEL%
     echo(
@@ -103,8 +103,11 @@ REM Check that the daemon is actually reachable
     exit /b 1
 )
 
-REM --update: fetch the latest release and rebuild (the changed build-arg busts the layer cache)
+REM --update: refresh the source, fetch the latest agent release, then rebuild.
+REM The changed build-arg busts the agent layer; any source change busts whichever
+REM layer it belongs to, further up. See :update_source at the end of this file.
 if defined FORCE_UPDATE (
+    call :update_source
     if /i "%AGENT%"=="codex" (
         echo Fetching latest Codex CLI version...
         set LATEST_VERSION=
@@ -217,7 +220,65 @@ echo   Agent:       %AGENT_LABEL%   (switch with AGENT=claude^|codex)
 echo   Auth:        %AUTH_STATUS%
 echo   Workspace:   %cd% -^> %WORKSPACE_PATH%
 echo   Home volume: %VOLUME_NAME% (persistent)
-echo   Update:      %LAUNCHER% --update   rebuilds with the latest release
+echo   Update:      %LAUNCHER% --update   pulls the latest source + release, rebuilds
 echo --------------------------------------------------------------
 
 %RUNTIME% run --rm -it --network=bridge -w "%WORKSPACE_PATH%" %RUNTIME_FLAGS% %ENV_FLAGS% %HOST_MOUNTS% -v %VOLUME_NAME%:/home/claude -v "%cd%:%WORKSPACE_PATH%" %IMAGE_NAME% !RUN_ARGS!
+exit /b !ERRORLEVEL!
+
+REM ---------------------------------------------------------------------------
+REM Refresh the launcher's own source tree, called only by --update.
+REM
+REM The build context is %SCRIPT_DIR% - the checkout this script lives in, which
+REM under the installer is %LOCALAPPDATA%\docker-claude and is *not* whatever
+REM clone you may be editing elsewhere. Without this step, --update faithfully
+REM rebuilds a months-old Containerfile with a newer agent pinned into it: the
+REM agent moves, every toolchain in the image stays frozen, and nothing on screen
+REM says why.
+REM
+REM It only ever fast-forwards, and only a clean checkout that tracks an
+REM upstream: this may well be someone's working clone, and an update flag must
+REM never discard their commits or edits. Every reason for skipping is printed,
+REM because "did not update" is precisely the state that must not pass silently.
+:update_source
+where git >nul 2>nul || (
+    echo Source: git not found - building %SCRIPT_DIR% as it stands.
+    exit /b 0
+)
+if not exist "%SCRIPT_DIR%\.git" (
+    echo Source: %SCRIPT_DIR% is not a git checkout - building it as it stands.
+    exit /b 0
+)
+set SRC_DIRTY=
+for /f "delims=" %%S in ('git -C "%SCRIPT_DIR%" status --porcelain 2^>nul') do set SRC_DIRTY=1
+if defined SRC_DIRTY (
+    echo Source: %SCRIPT_DIR% has uncommitted changes - building those, not pulling.
+    exit /b 0
+)
+set SRC_UPSTREAM=
+for /f "delims=" %%U in ('git -C "%SCRIPT_DIR%" rev-parse --abbrev-ref --symbolic-full-name "@{u}" 2^>nul') do set SRC_UPSTREAM=%%U
+if not defined SRC_UPSTREAM (
+    echo Source: %SCRIPT_DIR% tracks no upstream branch - building it as it stands.
+    exit /b 0
+)
+echo Updating launcher source in %SCRIPT_DIR% ^(!SRC_UPSTREAM!^)...
+set SRC_BEFORE=
+for /f "delims=" %%B in ('git -C "%SCRIPT_DIR%" rev-parse --short HEAD 2^>nul') do set SRC_BEFORE=%%B
+REM GIT_TERMINAL_PROMPT=0 so a repo that has become private (or a token that has
+REM expired) fails immediately instead of hanging the launcher on a credential
+REM prompt nobody expects from `cclaude --update`.
+set GIT_TERMINAL_PROMPT=0
+git -C "%SCRIPT_DIR%" pull --ff-only --quiet
+if errorlevel 1 (
+    echo Warning: %SCRIPT_DIR% could not be fast-forwarded onto !SRC_UPSTREAM!. >&2
+    echo          Building the checkout as it stands - reconcile it with git to pick up newer changes. >&2
+    exit /b 0
+)
+set SRC_AFTER=
+for /f "delims=" %%A in ('git -C "%SCRIPT_DIR%" rev-parse --short HEAD 2^>nul') do set SRC_AFTER=%%A
+if "!SRC_BEFORE!"=="!SRC_AFTER!" (
+    echo Source: already current ^(!SRC_AFTER!^).
+) else (
+    echo Source: updated !SRC_BEFORE! -^> !SRC_AFTER!.
+)
+exit /b 0
