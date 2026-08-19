@@ -79,4 +79,12 @@ The run script auto-detects the runtime, preferring Docker. Both work, with trad
 | macOS stability | Reliable | VM socket freezes (auto-recovered by script) |
 | Daemon | `dockerd` runs as root | Daemonless |
 | Rootless | Requires extra setup | Default |
-| Security hardening | `--cap-drop=ALL --security-opt=no-new-privileges` | `--userns=keep-id` |
+| Security hardening | `--cap-drop=ALL --security-opt=no-new-privileges`, plus the five capabilities the entrypoint's root stage needs (`CHOWN`, `FOWNER`, `SETUID`, `SETGID`, `DAC_OVERRIDE`) | `--userns=keep-id` |
+
+> The entrypoint has a root-only setup stage — it repairs ownership on the
+> persistent `claude-home` volume, then `exec`s the agent as the unprivileged
+> `claude` user through `gosu` — so the Docker flags drop all capabilities and
+> add back the five that stage needs (`CHOWN`, `FOWNER`, `SETUID`, `SETGID`,
+> `DAC_OVERRIDE`). See
+> [Home volume permissions](../README.md#home-volume-permissions) in the main
+> README.

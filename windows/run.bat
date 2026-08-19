@@ -182,11 +182,23 @@ if defined GIT_ACCESS_ON (
     )
 )
 
-REM Runtime-specific flags
+REM Runtime-specific flags.
+REM
+REM Under Docker every capability is dropped and only the five the entrypoint's
+REM root stage needs are added back: it repairs ownership on the persistent home
+REM volume (CHOWN, FOWNER, DAC_OVERRIDE) and then execs the agent as the
+REM unprivileged claude user via gosu (SETUID, SETGID). A bare --cap-drop=ALL
+REM leaves root unable to do either, and the launch dies at the gosu step. The
+REM agent itself still ends up unprivileged - see the Security model in the README.
+REM
+REM no-new-privileges is orthogonal: it stops execve from ever *granting*
+REM privilege (setuid bits, file capabilities), which is why it can sit alongside
+REM the added capabilities. gosu's setuid() uses the capability the process
+REM already holds rather than gaining one, so the drop still works.
 if "%RUNTIME%"=="podman" (
     set RUNTIME_FLAGS=--userns=keep-id
 ) else (
-    set RUNTIME_FLAGS=--cap-drop=ALL --security-opt=no-new-privileges
+    set RUNTIME_FLAGS=--cap-drop=ALL --cap-add=CHOWN --cap-add=FOWNER --cap-add=SETUID --cap-add=SETGID --cap-add=DAC_OVERRIDE --security-opt=no-new-privileges
 )
 
 REM Summarize the active auth source for the banner. An env-var key takes

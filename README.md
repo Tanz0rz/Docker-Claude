@@ -43,9 +43,9 @@ Docker or Podman must be installed before running the installer — see your OS 
 
 ## How it works
 
-- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, common dev tools (git, curl, jq, python3, build-essential), the [Go](https://go.dev) toolchain and [Ruff](https://docs.astral.sh/ruff/) (see [Go & Ruff](#go--ruff)), and the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) game framework (see [Haxe & HaxeFlixel](#haxe--haxeflixel))
+- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, common dev tools (git, curl, jq, python3, build-essential), the [Go](https://go.dev) toolchain with its usual companions (golangci-lint, staticcheck, goimports, Delve, gotestsum), [Ruff](https://docs.astral.sh/ruff/), and [pytest](https://docs.pytest.org) (see [Go, Ruff & pytest](#go-ruff--pytest)), and the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) game framework (see [Haxe & HaxeFlixel](#haxe--haxeflixel))
 - **run.sh / run.bat** — Builds the image, creates a persistent volume, and runs the container with your project mounted at `/workspace`. Each OS directory has its own run script. The `AGENT` env var (set by the `ccodex` launcher) selects which agent runs; it defaults to `claude`.
-- **Named volume** (`claude-home`) — Persists `/home/claude` across runs, including both agents' auth tokens, settings, memory, and history
+- **Named volume** (`claude-home`) — Persists `/home/claude` across runs, including both agents' auth tokens, settings, memory, and history, plus the caches the toolchains write there (Go's module and build cache, npm's cache). Because it outlives any single image, the entrypoint repairs its ownership on every start — see [Home volume permissions](#home-volume-permissions)
 - **Project mount** — Your current directory is bind-mounted to `/workspace/<project>` so the agent can read and edit your code
 
 ### Launch options
@@ -89,7 +89,7 @@ ccodex -- --help                # reach Codex's own help (see the first line of 
 | Filesystem | Protected | Only `/workspace` (your project) is mounted |
 | Processes | Protected | No access to host processes |
 | Network | Protected | Outbound web access only (bridge mode) |
-| Privilege escalation | Protected | Capabilities dropped, no-new-privileges |
+| Privilege escalation | Protected | Runs as the unprivileged `claude` user; capabilities dropped bar the five the entrypoint's root stage needs, plus no-new-privileges |
 
 ## What's shared
 
@@ -99,14 +99,53 @@ ccodex -- --help                # reach Codex's own help (see the first line of 
 - **Project directory** — Read-write mount of your current directory
 - **Clipboard (Linux/Wayland only)** — The Wayland compositor socket is mounted so image paste (ctrl+v) works in the TUI
 
-## Go & Ruff
+## Go, Ruff & pytest
 
-- **Go 1.26.6** — installed at `/opt/go` and on `PATH` (`go`, `gofmt`)
+- **Go 1.26.6** — installed at `/opt/go` and on `PATH`, with everything the toolchain ships: `go build`, `go test`, `go vet`, `gofmt`
+- **Go dev tooling** — installed at `/opt/gotools/bin` and on `PATH`:
+  - `golangci-lint` 2.12.2 — the meta-linter (govet, staticcheck, errcheck, ineffassign, unused, … in one pass, honouring a project's `.golangci.yml`)
+  - `staticcheck` 0.7.0 — the same analyzers standalone, for `staticcheck ./...`
+  - `goimports` 0.49.0 — `gofmt` plus automatic import add/remove/grouping
+  - `dlv` 1.27.1 — the Delve debugger
+  - `gotestsum` 1.13.0 — `go test` with readable output and JUnit/JSON reports
 - **Ruff 0.16.3** — the Python linter/formatter, installed at `/opt/ruff` and linked into `/usr/local/bin/ruff`
+- **pytest 9.1.1** — the Python test runner, installed in its own virtualenv at `/opt/pytest` and linked into `/usr/local/bin/pytest`
 
-Both are pinned via the `GO_VERSION` / `RUFF_VERSION` build args; bump them and rebuild (`docker rmi claude-code && cclaude`) to upgrade. They live in `/opt` rather than the home directory so the persistent `claude-home` volume can't mask or freeze them — the same reasoning as the agents themselves.
+All of them are pinned via build args (`GO_VERSION`, `GOLANGCI_LINT_VERSION`, `STATICCHECK_VERSION`, `GOIMPORTS_VERSION`, `DELVE_VERSION`, `GOTESTSUM_VERSION`, `RUFF_VERSION`, `PYTEST_VERSION`); bump them and rebuild (`docker rmi claude-code && cclaude`) to upgrade. They live in `/opt` rather than the home directory so the persistent `claude-home` volume can't mask or freeze them — the same reasoning as the agents themselves.
 
-`GOPATH` and the module cache stay at their defaults under `~/go`, which *is* on the persistent volume, so downloaded modules and build cache survive across sessions. `GOTOOLCHAIN=local` is set so a project's `go.mod` can't silently pull a different Go toolchain; unset it in the Containerfile if you want Go's auto-upgrade behavior.
+Go's writable state is pinned explicitly rather than left to the defaults, so nothing depends on `$HOME`/`$XDG_CACHE_HOME` being what Go expects:
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `GOPATH` | `/home/claude/go` | On the persistent volume, so `go install`ed tools survive |
+| `GOMODCACHE` | `/home/claude/go/pkg/mod` | Downloaded modules survive across sessions |
+| `GOCACHE` | `/home/claude/.cache/go-build` | Build cache survives, so repeat builds are warm |
+| `GOTOOLCHAIN` | `local` | `go` always means the `/opt/go` install |
+
+`$GOPATH/bin` (`~/go/bin`) is on `PATH`, so anything installed at runtime with `go install` is runnable straight away. The entrypoint creates these directories and fixes their ownership on every start — see [Home volume permissions](#home-volume-permissions) for why that matters.
+
+`GOTOOLCHAIN=local` also means a stale `golang.org/toolchain@*` tree in the module cache (left by a session that ran before this pin existed) is ignored rather than silently preferred over the image's Go. If a project's `go.mod` requires a newer Go than the image ships, bump `GO_VERSION` and rebuild rather than unsetting the pin.
+
+The Go language server, `gopls`, is deliberately *not* in the image — nothing in the container speaks LSP and it is a large binary. If you want it, `go install golang.org/x/tools/gopls@latest` puts it in `~/go/bin`, which is on `PATH` and on the persistent volume, so it survives across sessions.
+
+The bundled `pytest` runs out of its own virtualenv, so it can import the standard library and the code under test, but not third-party packages. A project whose tests need extra dependencies should make a local venv instead (`python3 -m venv .venv && .venv/bin/pip install pytest <deps>`) — `python3-venv` is in the image for exactly that.
+
+## Home volume permissions
+
+The `claude-home` volume outlives any single image, so it accumulates files owned by whoever wrote them — root (when the container runtime creates a mount point) or a stranger UID (from an image built when the container user was not 1000). Those directories are unwritable for the `claude` user, and the failure surfaces nowhere near the cause:
+
+```
+go: mkdir /home/claude/.cache/go-build: permission denied
+```
+
+with `~/.cache` owned by a UID that no longer exists in the image. The entrypoint therefore repairs ownership of the whole home tree on every start (`chown` to 1000:1000 for anything that isn't already), skipping the host bind mounts `~/.claude`, `~/.codex` and `~/.config/gh`, which belong to the host user. Nothing needs to be done by hand; an old volume is fixed by the next launch. The same pass also drops a `~/.haxelib` left pointing at a repository directory that no longer exists.
+
+This runs in the entrypoint's root stage, before `gosu` drops to the `claude` user, so the container has to hold `CAP_CHOWN` (and `CAP_SETUID`/`CAP_SETGID` for the drop itself). All three run scripts grant exactly those under Docker and use `--userns=keep-id` under Podman — see [Security model](#whats-protected). If you have customized the flags and stripped them, the repair is skipped, and the manual equivalent is:
+
+```
+docker run --rm -u 0 --entrypoint chown -v claude-home:/home/claude \
+  claude-code -R 1000:1000 /home/claude
+```
 
 ## Haxe & HaxeFlixel
 
@@ -128,7 +167,7 @@ lime test neko                          # build & run (or 'linux' for native, un
 
 > The `cclaude` and `ccodex` commands are the launchers installed by the [one-line installer](#quick-start) (or set up manually per the OS guide). Both wrap this repo's `run.sh` / `run.bat`, with `ccodex` setting `AGENT=codex`.
 
-The container comes with common dev tools (git, curl, jq, python3, build-essential, Go, Ruff, Haxe). When Claude needs something else, there are two approaches:
+The container comes with common dev tools (git, curl, jq, python3, build-essential, Go + linters, Ruff, pytest, Haxe). When Claude needs something else, there are two approaches:
 
 ### 1. Add to the Containerfile (permanent)
 
@@ -148,6 +187,16 @@ curl -fsSL https://sh.rustup.rs | sh -s -- -y   # installs into ~/.cargo, on the
 ```
 
 This works for any tool that supports user-level installation (pip, cargo, npm globals, language version managers, etc.).
+
+The conventional user-level bin directories are already on `PATH`, so a tool installed this way is runnable immediately:
+
+| Directory | Filled by |
+| --- | --- |
+| `~/.local/bin` | `pip install --user`, `pipx`, most `install.sh` scripts |
+| `~/.cargo/bin` | `rustup` / `cargo install` |
+| `~/go/bin` | `go install` (it is `$GOPATH/bin`) |
+
+This matters because the agent is `exec`'d directly rather than through a login shell: the `source ~/.profile` line installers like rustup append to your shell config is never read, so without those entries the binaries would be invisible despite installing fine. They are appended *after* the image's own directories, so an image-owned tool always wins over a stale copy in the volume.
 
 ## Updating the agents
 
@@ -172,6 +221,14 @@ docker rmi claude-code
 cclaude  # rebuilds automatically
 ```
 
+The same two commands are how any *other* change to the `Containerfile` or
+`entrypoint.sh` reaches a running setup — a new tool, a bumped `GO_VERSION`, a
+fix to the environment. The launchers only build when the image is missing, so
+an existing `claude-code` image keeps being reused, however old it is, until you
+remove it or pass `--update`. If a tool this README documents appears to be
+missing inside the container, an image predating it is the first thing to check:
+`docker image inspect claude-code --format '{{.Created}}'`.
+
 ## Security model
 
 The container significantly reduces the blast radius of running these agents with their approval gates off, but it is not a perfect sandbox. Understand what is and isn't protected:
@@ -179,7 +236,7 @@ The container significantly reduces the blast radius of running these agents wit
 ### What's protected
 
 - **Host filesystem** — only your project directory is mounted; the rest of your filesystem is inaccessible
-- **Privilege escalation** — all Linux capabilities are dropped (`--cap-drop=ALL`, `--security-opt=no-new-privileges`)
+- **Privilege escalation** — the agent runs as the unprivileged `claude` user, never root: the entrypoint does its root-only setup (volume ownership, credential permissions) and then `exec`s the agent through `gosu`, so no root process remains. The root account is locked and setuid/setgid bits are stripped from every binary but `gosu` itself. Under Docker every capability is dropped (`--cap-drop=ALL`) and only the five that root stage needs are added back — `CHOWN`, `FOWNER` and `DAC_OVERRIDE` for the volume ownership pass, `SETUID` and `SETGID` for the `gosu` drop itself — together with `--security-opt=no-new-privileges`, which stops `execve` from ever *granting* privilege (setuid bits, file capabilities) and so sits happily alongside those five: `gosu` uses a capability the process already holds rather than gaining one. All three run scripts pass the same set. Under Podman the container is run with `--userns=keep-id` instead
 - **Host processes** — the container has no visibility into host processes
 - **Docker socket** — not mounted, so the container cannot spawn sibling containers
 

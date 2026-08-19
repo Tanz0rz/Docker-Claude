@@ -11,6 +11,47 @@ CLAUDE_GID=1000
 # from a previous run.
 chown "$CLAUDE_UID:$CLAUDE_GID" "$CLAUDE_HOME"
 
+# ...and of everything inside it. The persistent volume outlives any single
+# image, so it accumulates files owned by whoever wrote them: root (from the
+# runtime creating mount points) or a stranger UID (from an image whose user was
+# not 1000). Every such directory is unwritable for the claude user, and the
+# failures land far from the cause — `go build` dying with
+# "mkdir /home/claude/.cache/go-build: permission denied", npm refusing to touch
+# ~/.npm — so repair the whole tree on every start rather than one directory at
+# a time.
+#
+# The host bind mounts are pruned: .claude and .codex belong to the host user
+# and are handled individually below, .config/gh is mounted read-only, and
+# recursing into any of them would be slow and would rewrite host-side
+# ownership. -exec chown -h keeps symlinks from being followed out of the home
+# directory.
+find "$CLAUDE_HOME" -mindepth 1 \
+  \( -path "$CLAUDE_HOME/.claude" -o -path "$CLAUDE_HOME/.codex" \
+     -o -path "$CLAUDE_HOME/.config/gh" \) -prune -o \
+  \( ! -user "$CLAUDE_UID" -o ! -group "$CLAUDE_GID" \) \
+  -exec chown -h "$CLAUDE_UID:$CLAUDE_GID" {} + 2>/dev/null || true
+
+# Cache and GOPATH directories the image's ENV points at. Creating them here
+# means a volume that predates those settings still gets them, and the tools
+# never have to create them as a side effect of the first build.
+gosu "$CLAUDE_USER" mkdir -p \
+  "$CLAUDE_HOME/.cache/go-build" \
+  "$CLAUDE_HOME/go/bin" \
+  "$CLAUDE_HOME/go/pkg/mod" 2>/dev/null || true
+
+# haxelib keeps its repository path in ~/.haxelib, which lives on the persistent
+# volume and so can outlive the directory it names — a session that ran
+# `haxelib newrepo` under /tmp leaves a pointer to a path that no longer exists,
+# and every later session sees an empty library repo instead of the image's
+# Flixel stack. HAXELIB_PATH (set in the image) currently takes priority, so
+# this is belt and braces: drop the file only when it points somewhere gone.
+if [ -f "$CLAUDE_HOME/.haxelib" ]; then
+  haxelib_repo="$(head -n1 "$CLAUDE_HOME/.haxelib" | tr -d '\r')"
+  if [ -n "$haxelib_repo" ] && [ ! -d "$haxelib_repo" ]; then
+    rm -f "$CLAUDE_HOME/.haxelib"
+  fi
+fi
+
 # Git identity and credentials. GIT_ACCESS (set by the run script) gates whether
 # the host's SSH keys and gitconfig reach the container. When it's off we also
 # purge any copies a previous run left in the persistent home volume, so

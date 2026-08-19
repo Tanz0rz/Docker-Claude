@@ -5,6 +5,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     jq \
     python3 \
+    python3-venv \
     build-essential \
     ca-certificates \
     openssh-client \
@@ -138,15 +139,32 @@ RUN set -eux; \
 # Pin the versions so builds are reproducible; bump them and rebuild to upgrade,
 # since the layer is otherwise cached.
 #
-# GOPATH/GOMODCACHE are left at their defaults (~/go), which lives in the
-# persistent volume — so downloaded modules and build cache survive across runs
-# while the toolchain itself stays owned by the image. GOTOOLCHAIN=local keeps a
-# project's go.mod from silently downloading a different toolchain behind our back;
-# drop it if you want the Go 1.21+ auto-upgrade behavior.
+# GOPATH, the module cache and the build cache live under /home/claude — on the
+# persistent volume — so downloaded modules and compiled packages survive across
+# runs while the toolchain itself stays owned by the image. They are set
+# explicitly rather than left implicit: the defaults are derived from $HOME and
+# $XDG_CACHE_HOME, and when either is unset or points somewhere unwritable the
+# failure surfaces far from its cause ("mkdir /home/claude/.cache/go-build:
+# permission denied" in the middle of an unrelated `go vet`). The entrypoint
+# guarantees both directories exist and belong to the claude user on every start,
+# and the `install -d` below seeds them with the right ownership for a fresh
+# volume.
+#
+# $GOPATH/bin is on PATH so anything installed at runtime with `go install`
+# (gopls, mockgen, a project's own codegen tool) is immediately runnable.
+#
+# GOTOOLCHAIN=local keeps a project's go.mod from silently downloading a
+# different toolchain behind our back — including from a stale
+# golang.org/toolchain@* tree left in the module cache by an earlier session —
+# so `go` always means the /opt/go install below. Drop it if you want the
+# Go 1.21+ auto-upgrade behavior.
 ARG GO_VERSION=1.26.6
 ARG RUFF_VERSION=0.16.3
-ENV GOTOOLCHAIN=local
-ENV PATH="/opt/go/bin:${PATH}"
+ENV GOTOOLCHAIN=local \
+    GOPATH=/home/claude/go \
+    GOMODCACHE=/home/claude/go/pkg/mod \
+    GOCACHE=/home/claude/.cache/go-build
+ENV PATH="/opt/go/bin:/home/claude/go/bin:${PATH}"
 RUN set -eux; \
     dpkgArch="$(dpkg --print-architecture)"; \
     case "$dpkgArch" in \
@@ -164,8 +182,118 @@ RUN set -eux; \
     ln -s /opt/ruff/ruff /usr/local/bin/ruff; \
     rm -f /tmp/go.tar.gz /tmp/ruff.tar.gz; \
     chmod -R a+rX /opt/go /opt/ruff; \
+    install -d -o claude -g claude \
+      /home/claude/.cache /home/claude/.cache/go-build \
+      /home/claude/go /home/claude/go/bin /home/claude/go/pkg/mod; \
     go version; \
     ruff --version
+
+# Install the Go developer tooling that daily Go work wants on top of the
+# toolchain itself. `go build`, `go test`, `go vet` and `gofmt` already come with
+# the Go install above; this layer adds the linters, import-fixer, debugger and
+# test runner that are not part of the distribution:
+#
+#   golangci-lint  the standard meta-linter (runs govet, staticcheck, errcheck,
+#                  ineffassign, unused, ... in one pass, honouring a project's
+#                  .golangci.yml)
+#   staticcheck    the same analyzers standalone, for `staticcheck ./...`
+#   goimports      gofmt plus automatic import add/remove/grouping
+#   dlv            the Delve debugger
+#   gotestsum      `go test` with readable output and JUnit/JSON reports
+#
+# `go install` writes to $GOBIN, whose default (~/go/bin) sits on the persistent
+# claude-home volume and would mask or freeze these binaries — the same trap the
+# rest of this file avoids — so GOBIN points at /opt/gotools/bin, which is
+# image-owned and goes on PATH. GOPATH/GOCACHE are redirected to /tmp for the
+# duration of the build and deleted afterwards so the module downloads don't
+# bloat the layer; at runtime they are back at their ~/go defaults (see above),
+# where the persistent volume is exactly what you want.
+#
+# golangci-lint is installed from its release tarball rather than `go install`,
+# which upstream discourages because the linter must be built against the same
+# Go version it analyses with.
+#
+# gopls, the Go language server, is deliberately left out: nothing in this
+# container speaks LSP and it is a large binary. Add it per project or per
+# session with `go install golang.org/x/tools/gopls@latest` (it lands in
+# ~/go/bin, which is on the persistent volume, so it survives).
+#
+# Pin the versions so builds are reproducible; bump them and rebuild to upgrade,
+# since the layer is otherwise cached.
+ARG GOLANGCI_LINT_VERSION=2.12.2
+ARG STATICCHECK_VERSION=v0.7.0
+ARG GOIMPORTS_VERSION=v0.49.0
+ARG DELVE_VERSION=v1.27.1
+ARG GOTESTSUM_VERSION=v1.13.0
+ENV PATH="/opt/gotools/bin:${PATH}"
+RUN set -eux; \
+    dpkgArch="$(dpkg --print-architecture)"; \
+    case "$dpkgArch" in \
+      amd64) lintArch='linux-amd64' ;; \
+      arm64) lintArch='linux-arm64' ;; \
+      *) echo "unsupported architecture: $dpkgArch" >&2; exit 1 ;; \
+    esac; \
+    lintDir="golangci-lint-${GOLANGCI_LINT_VERSION}-${lintArch}"; \
+    mkdir -p /opt/gotools/bin; \
+    curl -fsSL -o /tmp/golangci-lint.tar.gz \
+      "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/${lintDir}.tar.gz"; \
+    tar -xzf /tmp/golangci-lint.tar.gz -C /opt/gotools/bin --strip-components=1 \
+      "${lintDir}/golangci-lint"; \
+    rm -f /tmp/golangci-lint.tar.gz; \
+    export GOBIN=/opt/gotools/bin GOPATH=/tmp/gopath GOMODCACHE=/tmp/gopath/pkg/mod GOCACHE=/tmp/gocache; \
+    go install "honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}"; \
+    go install "golang.org/x/tools/cmd/goimports@${GOIMPORTS_VERSION}"; \
+    go install "github.com/go-delve/delve/cmd/dlv@${DELVE_VERSION}"; \
+    go install "gotest.tools/gotestsum@${GOTESTSUM_VERSION}"; \
+    go clean -modcache; \
+    rm -rf /tmp/gopath /tmp/gocache; \
+    chmod -R a+rX /opt/gotools; \
+    golangci-lint --version; \
+    staticcheck --version; \
+    command -v goimports; \
+    dlv version; \
+    gotestsum --version
+
+# Install pytest into its own virtualenv at /opt/pytest and put the runner on
+# PATH. It lands in /opt — image-owned and OUTSIDE /home/claude — for the same
+# reason everything else above does: the persistent claude-home volume is mounted
+# over /home/claude at runtime and would mask or freeze anything installed under
+# the home directory.
+#
+# A dedicated venv (rather than pip-installing into the system interpreter) is
+# what Debian's PEP 668 "externally managed" python3 wants. The python3-venv
+# package it needs is pulled in the apt layer at the top of this file, which also
+# means projects can create their own venvs with `python3 -m venv .venv`.
+#
+# Note the scope: this pytest can only import what lives in its own venv, so it
+# covers tests that need nothing beyond the standard library and the code under
+# test. A project with third-party test dependencies should create its own venv
+# and install pytest there (`python3 -m venv .venv && .venv/bin/pip install pytest`).
+#
+# Pin the version so builds are reproducible; bump it and rebuild to upgrade,
+# since the layer is otherwise cached.
+ARG PYTEST_VERSION=9.1.1
+RUN set -eux; \
+    python3 -m venv /opt/pytest; \
+    /opt/pytest/bin/pip install --no-cache-dir --upgrade pip; \
+    /opt/pytest/bin/pip install --no-cache-dir "pytest==${PYTEST_VERSION}"; \
+    ln -s /opt/pytest/bin/pytest /usr/local/bin/pytest; \
+    chmod -R a+rX /opt/pytest; \
+    pytest --version
+
+# Put the conventional user-level bin directories on PATH. Tools installed at
+# runtime into the persistent home volume — the documented way to add something
+# without a rebuild (rustup into ~/.cargo, pipx/pip --user into ~/.local) — drop
+# their binaries here, but the agent is exec'd directly rather than through a
+# login shell, so the `source ~/.profile` line those installers append is never
+# read and their binaries would stay invisible.
+#
+# They are APPENDED, not prepended: the image's own copies of a tool must keep
+# winning over anything the volume happens to hold (an old claude binary in
+# ~/.local/bin from a pre-/opt volume is exactly the drift this file exists to
+# prevent). The directories need not exist — PATH entries that don't resolve are
+# ignored.
+ENV PATH="${PATH}:/home/claude/.local/bin:/home/claude/.cargo/bin"
 
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 

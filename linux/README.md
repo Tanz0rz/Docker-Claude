@@ -96,4 +96,12 @@ The run script auto-detects the runtime, preferring Docker.
 | Linux stability | Reliable | Reliable (native, no VM) |
 | Daemon | `dockerd` runs as root | Daemonless |
 | Rootless | Requires `usermod -aG docker` | Default |
-| Security hardening | `--cap-drop=ALL --security-opt=no-new-privileges` | `--userns=keep-id` |
+| Security hardening | `--cap-drop=ALL --security-opt=no-new-privileges`, plus the five capabilities the entrypoint's root stage needs (`CHOWN`, `FOWNER`, `SETUID`, `SETGID`, `DAC_OVERRIDE`) | `--userns=keep-id` |
+
+Under either runtime the agent itself runs as the unprivileged `claude` user: the
+entrypoint does its root-only setup — repairing ownership on the persistent
+`claude-home` volume, fixing credential permissions — and then `exec`s the agent
+through `gosu`, leaving no root process behind. That root stage is why the Docker
+flags drop all capabilities and add back a specific five rather than none at all;
+see [Home volume permissions](../README.md#home-volume-permissions) for what the
+ownership pass fixes and why it exists.

@@ -66,3 +66,18 @@ $dir = 'C:\path\to\Docker-Claude\windows'
 ```
 
 Restart your terminal, then run `cclaude` or `ccodex` from any project directory.
+
+## Container security flags
+
+`run.bat` runs the container with `--cap-drop=ALL --security-opt=no-new-privileges`
+under Docker, adding back the five capabilities the entrypoint needs (`CHOWN`,
+`FOWNER`, `SETUID`, `SETGID`, `DAC_OVERRIDE`), and with `--userns=keep-id` under
+Podman.
+
+> The entrypoint has a root-only setup stage — it repairs ownership on the
+> persistent `claude-home` volume, then `exec`s the agent as the unprivileged
+> `claude` user through `gosu` — so the Docker flags drop all capabilities and
+> add back the five that stage needs (`CHOWN`, `FOWNER`, `SETUID`, `SETGID`,
+> `DAC_OVERRIDE`). See
+> [Home volume permissions](../README.md#home-volume-permissions) in the main
+> README.

@@ -134,12 +134,24 @@ if ! $RUNTIME volume inspect "$VOLUME_NAME" &>/dev/null; then
   $RUNTIME volume create "$VOLUME_NAME"
 fi
 
-# Runtime-specific flags
+# Runtime-specific flags.
+#
+# Under Docker every capability is dropped and only the five the entrypoint's
+# root stage needs are added back: it repairs ownership on the persistent home
+# volume (CHOWN, FOWNER, DAC_OVERRIDE) and then execs the agent as the
+# unprivileged claude user via gosu (SETUID, SETGID). A bare --cap-drop=ALL
+# leaves root unable to do either, and the launch dies at the gosu step. The
+# agent itself still ends up unprivileged — see the Security model in the README.
+#
+# no-new-privileges is orthogonal: it stops execve from ever *granting* privilege
+# (setuid bits, file capabilities), which is why it can sit alongside the added
+# capabilities. gosu's setuid() uses the capability the process already holds
+# rather than gaining one, so the drop still works.
 RUNTIME_FLAGS=()
 if [ "$RUNTIME" = "podman" ]; then
   RUNTIME_FLAGS+=(--userns=keep-id)
 else
-  RUNTIME_FLAGS+=(--cap-drop=ALL --cap-add=CHOWN --cap-add=FOWNER --cap-add=SETUID --cap-add=SETGID --cap-add=DAC_OVERRIDE)
+  RUNTIME_FLAGS+=(--cap-drop=ALL --cap-add=CHOWN --cap-add=FOWNER --cap-add=SETUID --cap-add=SETGID --cap-add=DAC_OVERRIDE --security-opt=no-new-privileges)
 fi
 
 # Derive a unique workspace path from the host directory name
