@@ -118,6 +118,11 @@ if defined FORCE_UPDATE (
         )
         echo Rebuilding image with Codex CLI !LATEST_VERSION!...
         %RUNTIME% build --pull --build-arg CODEX_VERSION=!LATEST_VERSION! -t %IMAGE_NAME% -f "%SCRIPT_DIR%\Containerfile" "%SCRIPT_DIR%"
+        if errorlevel 1 (
+            echo Error: the image build failed. >&2
+            echo Refusing to launch - the old %IMAGE_NAME% image is still tagged and would run silently. >&2
+            exit /b 1
+        )
     ) else (
         echo Fetching latest Claude Code version...
         set LATEST_VERSION=
@@ -128,6 +133,11 @@ if defined FORCE_UPDATE (
         )
         echo Rebuilding image with Claude Code !LATEST_VERSION!...
         %RUNTIME% build --pull --build-arg CLAUDE_CODE_VERSION=!LATEST_VERSION! -t %IMAGE_NAME% -f "%SCRIPT_DIR%\Containerfile" "%SCRIPT_DIR%"
+        if errorlevel 1 (
+            echo Error: the image build failed. >&2
+            echo Refusing to launch - the old %IMAGE_NAME% image is still tagged and would run silently. >&2
+            exit /b 1
+        )
     )
 )
 
@@ -135,6 +145,10 @@ REM Build if image doesn't exist
 %RUNTIME% image inspect %IMAGE_NAME% >nul 2>nul || (
     echo Building image...
     %RUNTIME% build -t %IMAGE_NAME% -f "%SCRIPT_DIR%\Containerfile" "%SCRIPT_DIR%"
+    if errorlevel 1 (
+        echo Error: the image build failed. >&2
+        exit /b 1
+    )
 )
 
 REM Create persistent volume if it doesn't exist
