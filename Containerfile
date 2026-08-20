@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     jq \
     python3 \
     python3-venv \
+    python3-pip \
     build-essential \
     ca-certificates \
     openssh-client \
@@ -130,13 +131,13 @@ RUN set -eux; \
     haxelib install hxcpp --always --quiet; \
     chmod -R a+rX /opt/neko /opt/haxe /opt/haxelib
 
-# Install the Go toolchain and Ruff (the Python linter/formatter). Both are
-# single self-contained trees, so they land in /opt — image-owned and OUTSIDE
-# /home/claude — for the same reason everything else above does: the persistent
-# claude-home volume is mounted over /home/claude at runtime and would mask or
-# freeze anything installed under the home directory.
+# Install the Go toolchain. It is a single self-contained tree, so it lands in
+# /opt — image-owned and OUTSIDE /home/claude — for the same reason everything
+# else above does: the persistent claude-home volume is mounted over /home/claude
+# at runtime and would mask or freeze anything installed under the home
+# directory.
 #
-# Pin the versions so builds are reproducible; bump them and rebuild to upgrade,
+# Pin the version so builds are reproducible; bump it and rebuild to upgrade,
 # since the layer is otherwise cached.
 #
 # GOPATH, the module cache and the build cache live under /home/claude — on the
@@ -159,7 +160,6 @@ RUN set -eux; \
 # so `go` always means the /opt/go install below. Drop it if you want the
 # Go 1.21+ auto-upgrade behavior.
 ARG GO_VERSION=1.26.6
-ARG RUFF_VERSION=0.16.3
 ENV GOTOOLCHAIN=local \
     GOPATH=/home/claude/go \
     GOMODCACHE=/home/claude/go/pkg/mod \
@@ -168,25 +168,19 @@ ENV PATH="/opt/go/bin:/home/claude/go/bin:${PATH}"
 RUN set -eux; \
     dpkgArch="$(dpkg --print-architecture)"; \
     case "$dpkgArch" in \
-      amd64) goArch='amd64'; ruffArch='x86_64-unknown-linux-gnu' ;; \
-      arm64) goArch='arm64'; ruffArch='aarch64-unknown-linux-gnu' ;; \
+      amd64) goArch='amd64' ;; \
+      arm64) goArch='arm64' ;; \
       *) echo "unsupported architecture: $dpkgArch" >&2; exit 1 ;; \
     esac; \
     curl -fsSL -o /tmp/go.tar.gz \
       "https://go.dev/dl/go${GO_VERSION}.linux-${goArch}.tar.gz"; \
     tar -xzf /tmp/go.tar.gz -C /opt; \
-    mkdir -p /opt/ruff; \
-    curl -fsSL -o /tmp/ruff.tar.gz \
-      "https://github.com/astral-sh/ruff/releases/download/${RUFF_VERSION}/ruff-${ruffArch}.tar.gz"; \
-    tar -xzf /tmp/ruff.tar.gz -C /opt/ruff --strip-components=1; \
-    ln -s /opt/ruff/ruff /usr/local/bin/ruff; \
-    rm -f /tmp/go.tar.gz /tmp/ruff.tar.gz; \
-    chmod -R a+rX /opt/go /opt/ruff; \
+    rm -f /tmp/go.tar.gz; \
+    chmod -R a+rX /opt/go; \
     install -d -o claude -g claude \
       /home/claude/.cache /home/claude/.cache/go-build \
       /home/claude/go /home/claude/go/bin /home/claude/go/pkg/mod; \
-    go version; \
-    ruff --version
+    go version
 
 # Install the Go developer tooling that daily Go work wants on top of the
 # toolchain itself. `go build`, `go test`, `go vet` and `gofmt` already come with
@@ -253,6 +247,50 @@ RUN set -eux; \
     command -v goimports; \
     dlv version; \
     gotestsum --version
+
+# Install Ruff (the Python linter/formatter) as a WHEEL into the system
+# interpreter, rather than as its standalone release tarball.
+#
+# That distinction is load-bearing, and it is not obvious. Ruff ships two ways:
+# a self-contained binary tarball, and a PyPI wheel that bundles that very same
+# binary (byte for byte — both are 26204640 bytes at 0.16.3) behind a small
+# `ruff/__main__.py` shim. Unpacking the tarball onto PATH satisfies `ruff check`
+# and `ruff format`, but NOT `python3 -m ruff`, which is how a fair number of
+# project verify scripts and pre-commit-style gates invoke it. Those gates then
+# fail with a thoroughly misleading
+#
+#     /usr/bin/python3: No module named ruff
+#
+# on an image that demonstrably has `ruff` on PATH — sending whoever debugs it
+# hunting for a missing binary that is right there. (This image shipped the
+# tarball from its first Ruff commit through 2026-08-19 and had exactly that
+# gap.) Installing the wheel yields both entry points from a single pin: pip puts
+# the console script at /usr/local/bin/ruff and the importable module where the
+# system python3 already looks.
+#
+# --break-system-packages is what Debian bookworm's PEP 668 marker demands, and
+# it is both safe and honest here: we are the image builder, ruff declares zero
+# dependencies (so no apt-managed package can be shadowed or upgraded out from
+# under us), and Debian's pip resolves the destination to
+# /usr/local/lib/python3.11/dist-packages — the local-admin directory that apt
+# itself never writes to.
+#
+# pip also selects the wheel for the build platform on its own, so unlike the
+# tarball this needs no architecture case to keep in sync.
+#
+# Scope worth knowing: `ruff` on PATH works everywhere, but `python3 -m ruff`
+# resolves only for the system interpreter. Inside a project venv created without
+# --system-site-packages, the module is invisible; call `ruff` directly there, or
+# install ruff into that venv.
+#
+# Pin the version so builds are reproducible; bump it and rebuild to upgrade,
+# since the layer is otherwise cached.
+ARG RUFF_VERSION=0.16.3
+RUN set -eux; \
+    python3 -m pip install --no-cache-dir --break-system-packages \
+      "ruff==${RUFF_VERSION}"; \
+    ruff --version; \
+    python3 -m ruff --version
 
 # Install pytest into its own virtualenv at /opt/pytest and put the runner on
 # PATH. It lands in /opt — image-owned and OUTSIDE /home/claude — for the same

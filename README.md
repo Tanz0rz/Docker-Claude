@@ -43,7 +43,7 @@ Docker or Podman must be installed before running the installer — see your OS 
 
 ## How it works
 
-- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, common dev tools (git, curl, jq, python3, build-essential), the [Go](https://go.dev) toolchain with its usual companions (golangci-lint, staticcheck, goimports, Delve, gotestsum), [Ruff](https://docs.astral.sh/ruff/), and [pytest](https://docs.pytest.org) (see [Go, Ruff & pytest](#go-ruff--pytest)), and the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) game framework (see [Haxe & HaxeFlixel](#haxe--haxeflixel))
+- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, common dev tools (git, curl, jq, python3, pip, build-essential), the [Go](https://go.dev) toolchain with its usual companions (golangci-lint, staticcheck, goimports, Delve, gotestsum), [Ruff](https://docs.astral.sh/ruff/), and [pytest](https://docs.pytest.org) (see [Go, Ruff & pytest](#go-ruff--pytest)), and the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) game framework (see [Haxe & HaxeFlixel](#haxe--haxeflixel))
 - **run.sh / run.bat** — Builds the image, creates a persistent volume, and runs the container with your project mounted at `/workspace`. Each OS directory has its own run script. The `AGENT` env var (set by the `ccodex` launcher) selects which agent runs; it defaults to `claude`.
 - **Named volume** (`claude-home`) — Persists `/home/claude` across runs, including both agents' auth tokens, settings, memory, and history, plus the caches the toolchains write there (Go's module and build cache, npm's cache). Because it outlives any single image, the entrypoint repairs its ownership on every start — see [Home volume permissions](#home-volume-permissions)
 - **Project mount** — Your current directory is bind-mounted to `/workspace/<project>` so the agent can read and edit your code
@@ -108,10 +108,10 @@ ccodex -- --help                # reach Codex's own help (see the first line of 
   - `goimports` 0.49.0 — `gofmt` plus automatic import add/remove/grouping
   - `dlv` 1.27.1 — the Delve debugger
   - `gotestsum` 1.13.0 — `go test` with readable output and JUnit/JSON reports
-- **Ruff 0.16.3** — the Python linter/formatter, installed at `/opt/ruff` and linked into `/usr/local/bin/ruff`
+- **Ruff 0.16.3** — the Python linter/formatter, installed as a wheel into the system interpreter, so *both* entry points work: `ruff check .` (the console script, at `/usr/local/bin/ruff`) and `python3 -m ruff check .` (the module, which is how many project verify scripts and pre-commit-style gates call it). The standalone release tarball only ever provides the first, and a gate using the second fails with a misleading `No module named ruff` on an image that plainly has `ruff` on `PATH` — so the wheel is deliberate, not incidental. One caveat: `python3 -m ruff` resolves for the *system* python3; inside a project venv created without `--system-site-packages`, call `ruff` directly or install ruff into that venv
 - **pytest 9.1.1** — the Python test runner, installed in its own virtualenv at `/opt/pytest` and linked into `/usr/local/bin/pytest`
 
-All of them are pinned via build args (`GO_VERSION`, `GOLANGCI_LINT_VERSION`, `STATICCHECK_VERSION`, `GOIMPORTS_VERSION`, `DELVE_VERSION`, `GOTESTSUM_VERSION`, `RUFF_VERSION`, `PYTEST_VERSION`); bump them and rebuild (`docker rmi claude-code && cclaude`) to upgrade. They live in `/opt` rather than the home directory so the persistent `claude-home` volume can't mask or freeze them — the same reasoning as the agents themselves.
+All of them are pinned via build args (`GO_VERSION`, `GOLANGCI_LINT_VERSION`, `STATICCHECK_VERSION`, `GOIMPORTS_VERSION`, `DELVE_VERSION`, `GOTESTSUM_VERSION`, `RUFF_VERSION`, `PYTEST_VERSION`); bump them and rebuild (`docker rmi claude-code && cclaude`) to upgrade. They live in `/opt` rather than the home directory so the persistent `claude-home` volume can't mask or freeze them — the same reasoning as the agents themselves. (Ruff is the one exception: as a wheel it lands in `/usr/local/lib/python3.11/dist-packages`, which is image-owned and outside `/home/claude` all the same, so the volume can't mask it either.)
 
 Go's writable state is pinned explicitly rather than left to the defaults, so nothing depends on `$HOME`/`$XDG_CACHE_HOME` being what Go expects:
 
@@ -167,7 +167,7 @@ lime test neko                          # build & run (or 'linux' for native, un
 
 > The `cclaude` and `ccodex` commands are the launchers installed by the [one-line installer](#quick-start) (or set up manually per the OS guide). Both wrap this repo's `run.sh` / `run.bat`, with `ccodex` setting `AGENT=codex`.
 
-The container comes with common dev tools (git, curl, jq, python3, build-essential, Go + linters, Ruff, pytest, Haxe). When Claude needs something else, there are two approaches:
+The container comes with common dev tools (git, curl, jq, python3 + pip, build-essential, Go + linters, Ruff, pytest, Haxe). When Claude needs something else, there are two approaches:
 
 ### 1. Add to the Containerfile (permanent)
 
