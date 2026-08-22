@@ -319,6 +319,95 @@ RUN set -eux; \
     chmod -R a+rX /opt/pytest; \
     pytest --version
 
+# Install Playwright and a Chromium it can drive. Both live in /opt — image-owned
+# and OUTSIDE /home/claude — for the same reason everything else above does: the
+# persistent claude-home volume is mounted over /home/claude at runtime and would
+# mask or freeze anything installed under the home directory. Playwright's own
+# defaults would put the browsers in ~/.cache/ms-playwright, which is exactly
+# that trap, so PLAYWRIGHT_BROWSERS_PATH points them at /opt/ms-playwright
+# instead; the variable is ENV (not just set for the RUN) because the library
+# reads it at launch time too.
+#
+# Layout, and what each piece buys:
+#
+#   /opt/playwright/node_modules   @playwright/test (which pulls playwright and
+#                                  playwright-core at the same exact version) —
+#                                  a plain npm project rather than `npm -g`, so
+#                                  `require('playwright')` from an ad-hoc script
+#                                  resolves through NODE_PATH below without
+#                                  digging into npm's global tree
+#   /usr/local/bin/playwright      the CLI: `playwright test`, `screenshot`,
+#                                  `pdf`, `codegen`, `install`, ...
+#   /opt/ms-playwright             the browser builds: full Chromium, the
+#                                  chromium-headless-shell Playwright uses for
+#                                  headless runs by default, and ffmpeg for
+#                                  video recording
+#   /usr/local/bin/chromium        a wrapper around the full Chromium build, so
+#                                  the browser is also usable on its own
+#                                  (`chromium --headless --screenshot=...`) and
+#                                  by anything that just wants a chrome binary
+#
+# `install --with-deps` makes Playwright install the apt packages its Chromium
+# needs on this Debian (libnss3, libatk*, libcups2, libgbm1, libxkbcommon0, ...
+# plus the fonts that make screenshots look right — Liberation, Noto Color
+# Emoji, unifont, CJK/Thai fallbacks) from the list it maintains per release, so
+# the dependency set never drifts from the browser build; the apt lists it
+# fetches are removed afterwards like the other apt layers. xvfb for headed
+# runs is already in the apt layer at the top of this file.
+#
+# The `chromium` wrapper passes --no-sandbox and --disable-dev-shm-usage for the
+# same reasons Playwright itself does by default: Chromium's own sandbox needs
+# unprivileged user namespaces, which the default container seccomp profile
+# denies (and the entrypoint strips setuid bits anyway, so the setuid helper is
+# no fallback) — the container IS the sandbox here — and Docker's default 64 MB
+# /dev/shm is small enough to crash the renderer on heavier pages. Without the
+# first flag the bare binary simply refuses to start; with Playwright you get
+# both flags whether you go through the wrapper or not.
+#
+# NODE_PATH is searched only AFTER the normal node_modules lookup, so a project
+# that installs its own Playwright keeps winning; the global copy just means a
+# one-off `node screenshot.js` in a directory with no package.json works.
+#
+# Scope worth knowing: the browser revision in /opt/ms-playwright belongs to
+# THIS Playwright version. A project pinned to a different Playwright (npm or
+# pip) will look for its own revision there, not find it, and — because /opt is
+# read-only for the claude user — fail to `playwright install` into it. For
+# that project, either point it at the image's version, or install its browsers
+# on the persistent volume with
+# `PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright npx playwright install chromium`
+# and run it with the same override. The Python package (`pip install
+# playwright==<same version>` in a project venv) shares these browsers as long
+# as the version matches.
+#
+# Pin the version so builds are reproducible; bump it and rebuild to upgrade,
+# since the layer is otherwise cached. The browser revision follows the
+# Playwright version automatically.
+ARG PLAYWRIGHT_VERSION=1.62.1
+ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
+    NODE_PATH=/opt/playwright/node_modules
+RUN set -eux; \
+    mkdir -p /opt/playwright /opt/ms-playwright; \
+    printf '{"name":"image-playwright","private":true,"dependencies":{"@playwright/test":"%s"}}\n' \
+      "${PLAYWRIGHT_VERSION}" > /opt/playwright/package.json; \
+    cd /opt/playwright; \
+    npm install --no-audit --no-fund --omit=dev; \
+    npm cache clean --force; \
+    printf '#!/bin/sh\nexec node /opt/playwright/node_modules/@playwright/test/cli.js "$@"\n' \
+      > /usr/local/bin/playwright; \
+    chmod 755 /usr/local/bin/playwright; \
+    playwright install --with-deps chromium; \
+    rm -rf /var/lib/apt/lists/*; \
+    chrome="$(node -e 'process.stdout.write(require("playwright").chromium.executablePath())')"; \
+    test -x "$chrome"; \
+    printf '#!/bin/sh\nexec %s --no-sandbox --disable-dev-shm-usage "$@"\n' "$chrome" \
+      > /usr/local/bin/chromium; \
+    chmod 755 /usr/local/bin/chromium; \
+    chmod -R a+rX /opt/playwright /opt/ms-playwright; \
+    playwright --version; \
+    chromium --version; \
+    chromium --headless --dump-dom about:blank > /dev/null; \
+    playwright screenshot about:blank /tmp/pw-smoke.png && rm -f /tmp/pw-smoke.png
+
 # Put the conventional user-level bin directories on PATH. Tools installed at
 # runtime into the persistent home volume — the documented way to add something
 # without a rebuild (rustup into ~/.cargo, pipx/pip --user into ~/.local) — drop

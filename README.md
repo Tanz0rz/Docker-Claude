@@ -43,7 +43,7 @@ Docker or Podman must be installed before running the installer — see your OS 
 
 ## How it works
 
-- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, common dev tools (git, curl, jq, python3, pip, build-essential), the [Go](https://go.dev) toolchain with its usual companions (golangci-lint, staticcheck, goimports, Delve, gotestsum), [Ruff](https://docs.astral.sh/ruff/), and [pytest](https://docs.pytest.org) (see [Go, Ruff & pytest](#go-ruff--pytest)), and the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) game framework (see [Haxe & HaxeFlixel](#haxe--haxeflixel))
+- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, common dev tools (git, curl, jq, python3, pip, build-essential), the [Go](https://go.dev) toolchain with its usual companions (golangci-lint, staticcheck, goimports, Delve, gotestsum), [Ruff](https://docs.astral.sh/ruff/), and [pytest](https://docs.pytest.org) (see [Go, Ruff & pytest](#go-ruff--pytest)), the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) game framework (see [Haxe & HaxeFlixel](#haxe--haxeflixel)), and [Playwright](https://playwright.dev) with a Chromium it can drive (see [Playwright & Chromium](#playwright--chromium))
 - **run.sh / run.bat** — Builds the image, creates a persistent volume, and runs the container with your project mounted at `/workspace`. Each OS directory has its own run script. The `AGENT` env var (set by the `ccodex` launcher) selects which agent runs; it defaults to `claude`.
 - **Named volume** (`claude-home`) — Persists `/home/claude` across runs, including both agents' auth tokens, settings, memory, and history, plus the caches the toolchains write there (Go's module and build cache, npm's cache). Because it outlives any single image, the entrypoint repairs its ownership on every start — see [Home volume permissions](#home-volume-permissions)
 - **Project mount** — Your current directory is bind-mounted to `/workspace/<project>` so the agent can read and edit your code
@@ -163,11 +163,36 @@ cd MyGame
 lime test neko                          # build & run (or 'linux' for native, under xvfb-run)
 ```
 
+## Playwright & Chromium
+
+The image ships [Playwright](https://playwright.dev) together with a Chromium it can drive, so agents can screenshot pages, run browser tests, scrape JavaScript-rendered sites and record videos without installing anything first:
+
+- **Playwright 1.62.1** (`@playwright/test`, which brings `playwright` and `playwright-core` at the same version) — installed at `/opt/playwright` with the CLI on `PATH` as `playwright` (`playwright test`, `playwright screenshot`, `playwright pdf`, `playwright codegen`, …). `NODE_PATH` points at its `node_modules`, so a one-off `node screenshot.js` that does `require('playwright')` works from any directory; a project with its own Playwright in `node_modules` still wins, because `NODE_PATH` is only consulted after the normal lookup
+- **Chromium** — the browser builds Playwright pins for that version (full Chromium, the `chromium-headless-shell` it uses for headless runs by default, and ffmpeg for video) live in `/opt/ms-playwright`, where `PLAYWRIGHT_BROWSERS_PATH` points. A `chromium` command wraps the full build, so the browser is also usable on its own — `chromium --headless --screenshot=out.png https://example.com` — and by anything that just wants a Chrome binary to point at
+- **Runtime libraries and fonts** — the apt packages Playwright lists for its Chromium on this Debian (libnss3, libatk, libcups2, libgbm1, libxkbcommon0, …) plus the fonts that make screenshots look right (Liberation, Noto Color Emoji, unifont, CJK and Thai fallbacks). `xvfb` is in the image too, so headed mode works under `xvfb-run` (`xvfb-run playwright codegen https://example.com`)
+
+Headless is the default and needs no display. Two flags Playwright passes to Chromium by default are worth knowing because the `chromium` wrapper passes them too: `--no-sandbox`, since Chromium's own sandbox needs unprivileged user namespaces the container's default seccomp profile denies (the container *is* the sandbox here — see [Security model](#security-model)), and `--disable-dev-shm-usage`, since Docker's default 64 MB `/dev/shm` is small enough to crash the renderer on heavier pages.
+
+```bash
+playwright screenshot --full-page https://example.com shot.png   # quick screenshot
+playwright test                                                  # run a project's Playwright suite
+node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();const p=await b.newPage();await p.goto("https://example.com");console.log(await p.title());await b.close()})()'
+```
+
+The version is pinned via the `PLAYWRIGHT_VERSION` build arg (bump it and rebuild to upgrade; the browser revision follows it automatically). One caveat that follows from the pin: the browsers in `/opt/ms-playwright` belong to *this* Playwright version. A project pinned to a different one — npm or the Python package — will look for its own browser revision there, not find it, and fail to `playwright install` into `/opt` because that directory is read-only for the `claude` user. For such a project, either use the image's version, or install its browsers onto the persistent volume and run it with the same override:
+
+```bash
+PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright npx playwright install chromium
+PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright npx playwright test
+```
+
+Python Playwright is not preinstalled, but `pip install playwright==1.62.1` in a project venv (`python3 -m venv .venv && .venv/bin/pip install playwright==1.62.1`) uses the image's browsers as-is — the Node and Python packages share browser revisions at matching versions, so no download is needed.
+
 ## Managing dependencies
 
 > The `cclaude` and `ccodex` commands are the launchers installed by the [one-line installer](#quick-start) (or set up manually per the OS guide). Both wrap this repo's `run.sh` / `run.bat`, with `ccodex` setting `AGENT=codex`.
 
-The container comes with common dev tools (git, curl, jq, python3 + pip, build-essential, Go + linters, Ruff, pytest, Haxe). When Claude needs something else, there are two approaches:
+The container comes with common dev tools (git, curl, jq, python3 + pip, build-essential, Go + linters, Ruff, pytest, Haxe, Playwright + Chromium). When Claude needs something else, there are two approaches:
 
 ### 1. Add to the Containerfile (permanent)
 
