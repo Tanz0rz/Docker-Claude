@@ -43,7 +43,7 @@ Docker or Podman must be installed before running the installer — see your OS 
 
 ## How it works
 
-- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, common dev tools (git, curl, jq, python3, pip, build-essential), the [Go](https://go.dev) toolchain with its usual companions (golangci-lint, staticcheck, goimports, Delve, gotestsum), [Ruff](https://docs.astral.sh/ruff/), and [pytest](https://docs.pytest.org) (see [Go, Ruff & pytest](#go-ruff--pytest)), the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) game framework (see [Haxe & HaxeFlixel](#haxe--haxeflixel)), and [Playwright](https://playwright.dev) with a Chromium it can drive (see [Playwright & Chromium](#playwright--chromium))
+- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, common dev tools (git, curl, jq, python3, pip, build-essential), the [Go](https://go.dev) toolchain with its usual companions (golangci-lint, staticcheck, goimports, Delve, gotestsum), [Ruff](https://docs.astral.sh/ruff/), and [pytest](https://docs.pytest.org) (see [Go, Ruff & pytest](#go-ruff--pytest)), the [Rust](https://www.rust-lang.org) toolchain (rustc, cargo, rustfmt, clippy — see [Rust](#rust)), the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) game framework (see [Haxe & HaxeFlixel](#haxe--haxeflixel)), and [Playwright](https://playwright.dev) with a Chromium it can drive (see [Playwright & Chromium](#playwright--chromium))
 - **run.sh / run.bat** — Builds the image, creates a persistent volume, and runs the container with your project mounted at `/workspace`. Each OS directory has its own run script. The `AGENT` env var (set by the `ccodex` launcher) selects which agent runs; it defaults to `claude`.
 - **Named volume** (`claude-home`) — Persists `/home/claude` across runs, including both agents' auth tokens, settings, memory, and history, plus the caches the toolchains write there (Go's module and build cache, npm's cache). Because it outlives any single image, the entrypoint repairs its ownership on every start — see [Home volume permissions](#home-volume-permissions)
 - **Project mount** — Your current directory is bind-mounted to `/workspace/<project>` so the agent can read and edit your code
@@ -130,6 +130,30 @@ The Go language server, `gopls`, is deliberately *not* in the image — nothing 
 
 The bundled `pytest` runs out of its own virtualenv, so it can import the standard library and the code under test, but not third-party packages. A project whose tests need extra dependencies should make a local venv instead (`python3 -m venv .venv && .venv/bin/pip install pytest <deps>`) — `python3-venv` is in the image for exactly that.
 
+## Rust
+
+The image ships the Rust toolchain, installed via rustup and pinned to a stable release:
+
+- **Rust 1.98.0** (via **rustup 1.29.0**) — `rustc`, `cargo`, `cargo fmt` (rustfmt), `cargo clippy` (clippy), and the `rust-src` component (what rust-analyzer and standard-library source inspection need). `rust-docs` — hundreds of megabytes of offline HTML — is the one piece of the default profile left out.
+
+The install is split across the two homes Rust cares about, and the split follows the same rule as everything else in the image — toolchain image-owned, writable state on the persistent volume:
+
+| Variable | Value | Why |
+| --- | --- | --- |
+| `RUSTUP_HOME` | `/opt/rust/rustup` | The toolchain itself plus rustup's settings (recording the pinned default). Image-owned, read-only |
+| `CARGO_HOME` | `/home/claude/.cargo` | Registry cache, git checkouts, and `cargo install`ed binaries — on the volume, so they survive across sessions |
+
+The `rustup`, `cargo`, `rustc`, … binaries live at `/opt/rust/cargo/bin`, which sits on `PATH` *before* `~/.cargo/bin` — so the image's Rust wins over a stale rustup a pre-image-Rust volume may hold, while anything you `cargo install` at runtime (landing in `~/.cargo/bin`) is still runnable immediately. The entrypoint creates `~/.cargo` on every start, same as the Go directories.
+
+Because `RUSTUP_HOME` is read-only, `rustup toolchain install` and `rustup component add` do not work at runtime — the Rust analogue of `GOTOOLCHAIN=local`. A project's `rust-toolchain.toml` asking for a different version fails to auto-install rather than silently drifting. The preferred fix is to bump `RUST_VERSION` and rebuild; to use another toolchain without a rebuild, put a rustup home on the volume and override for the session:
+
+```bash
+export RUSTUP_HOME=~/.rustup                        # on the persistent volume
+rustup toolchain install nightly && rustup default nightly
+```
+
+Both versions are pinned via build args (`RUST_VERSION`, `RUSTUP_VERSION`); bump them and rebuild to upgrade. `rust-analyzer` is deliberately not in the image for the same reason `gopls` isn't — nothing in the container speaks LSP; if you want it, drop [a release binary](https://github.com/rust-lang/rust-analyzer/releases) into `~/.local/bin`, which is on `PATH` and on the volume.
+
 ## Home volume permissions
 
 The `claude-home` volume outlives any single image, so it accumulates files owned by whoever wrote them — root (when the container runtime creates a mount point) or a stranger UID (from an image built when the container user was not 1000). Those directories are unwritable for the `claude` user, and the failure surfaces nowhere near the cause:
@@ -192,7 +216,7 @@ Python Playwright is not preinstalled, but `pip install playwright==1.62.1` in a
 
 > The `cclaude` and `ccodex` commands are the launchers installed by the [one-line installer](#quick-start) (or set up manually per the OS guide). Both wrap this repo's `run.sh` / `run.bat`, with `ccodex` setting `AGENT=codex`.
 
-The container comes with common dev tools (git, curl, jq, python3 + pip, build-essential, Go + linters, Ruff, pytest, Haxe, Playwright + Chromium). When Claude needs something else, there are two approaches:
+The container comes with common dev tools (git, curl, jq, python3 + pip, build-essential, Go + linters, Rust, Ruff, pytest, Haxe, Playwright + Chromium). When Claude needs something else, there are two approaches:
 
 ### 1. Add to the Containerfile (permanent)
 
@@ -217,10 +241,10 @@ cclaude   # no --update; reuses the image you just built
 
 ### 2. Install to the named volume (persistent, no rebuild)
 
-Tools installed to `/home/claude` (the named volume) persist across sessions. For example, Claude could install Rust without a rebuild:
+Tools installed to `/home/claude` (the named volume) persist across sessions. For example, Claude could install [uv](https://docs.astral.sh/uv/) without a rebuild:
 
 ```bash
-curl -fsSL https://sh.rustup.rs | sh -s -- -y   # installs into ~/.cargo, on the volume
+curl -LsSf https://astral.sh/uv/install.sh | sh   # installs into ~/.local/bin, on the volume
 ```
 
 This works for any tool that supports user-level installation (pip, cargo, npm globals, language version managers, etc.).
@@ -230,7 +254,7 @@ The conventional user-level bin directories are already on `PATH`, so a tool ins
 | Directory | Filled by |
 | --- | --- |
 | `~/.local/bin` | `pip install --user`, `pipx`, most `install.sh` scripts |
-| `~/.cargo/bin` | `rustup` / `cargo install` |
+| `~/.cargo/bin` | `cargo install` (the toolchain itself is baked into the image — see [Rust](#rust)) |
 | `~/go/bin` | `go install` (it is `$GOPATH/bin`) |
 
 This matters because the agent is `exec`'d directly rather than through a login shell: the `source ~/.profile` line installers like rustup append to your shell config is never read, so without those entries the binaries would be invisible despite installing fine. They are appended *after* the image's own directories, so an image-owned tool always wins over a stale copy in the volume.

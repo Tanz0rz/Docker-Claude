@@ -248,6 +248,88 @@ RUN set -eux; \
     dlv version; \
     gotestsum --version
 
+# Install the Rust toolchain via rustup, pinned to a specific stable release.
+# The layout follows the same rule as everything else in this file — the
+# toolchain is image-owned in /opt, the writable state lives on the persistent
+# volume — but Rust splits those across two variables, and the split is the
+# whole trick:
+#
+#   RUSTUP_HOME=/opt/rust/rustup   the toolchain itself plus rustup's settings
+#                                  (which record the pinned default). Image-owned
+#                                  and read-only for the claude user.
+#   CARGO_HOME=/home/claude/.cargo (at runtime) cargo's registry cache, git
+#                                  checkouts, and `cargo install`ed binaries —
+#                                  exactly the state that should survive across
+#                                  sessions, so it goes on the volume. The
+#                                  entrypoint seeds it, and ~/.cargo/bin is
+#                                  already on PATH (appended at the bottom of
+#                                  this file, AFTER the image's directories).
+#
+# rustup-init is only given CARGO_HOME=/opt/rust/cargo for the duration of the
+# install, so the rustup binary and the cargo/rustc/... proxies it creates land
+# in the image at /opt/rust/cargo/bin — prepended to PATH below, which is what
+# keeps the image's Rust winning over a stale rustup the volume may hold from a
+# pre-image-Rust session that followed the README's "install to the volume"
+# route. The proxies find the toolchain through RUSTUP_HOME, not CARGO_HOME, so
+# pointing CARGO_HOME back at the home directory at runtime costs nothing.
+#
+# The toolchain is the minimal profile plus the components daily Rust work
+# wants: rustfmt (`cargo fmt`), clippy (`cargo clippy`), and rust-src (needed
+# by rust-analyzer and anything that inspects the standard library's source).
+# rust-docs — hundreds of megabytes of HTML nobody opens in a container — is
+# what "minimal + components" leaves out relative to the default profile.
+# rust-analyzer itself is deliberately not included, for the same reason gopls
+# isn't: nothing in this container speaks LSP.
+#
+# Because RUSTUP_HOME is read-only, `rustup toolchain install` and
+# `rustup component add` do not work at runtime — this is the Rust analogue of
+# GOTOOLCHAIN=local, and it also means a project's rust-toolchain.toml asking
+# for a different version fails to auto-install rather than drifting. To use
+# another toolchain without a rebuild, put a rustup home on the volume and
+# override the variable for the session:
+#     export RUSTUP_HOME=~/.rustup
+#     rustup toolchain install nightly && rustup default nightly
+# The preferred fix for "project needs a newer stable" is still to bump
+# RUST_VERSION and rebuild.
+#
+# Pin both versions so builds are reproducible (rustup-init comes from its
+# versioned archive URL, not the moving latest); bump them and rebuild to
+# upgrade, since the layer is otherwise cached. The smoke tests exercise the
+# toolchain the way callers actually invoke it — `cargo fmt`/`cargo clippy`
+# rather than bare binaries, plus a real compile-and-run so the cc linker path
+# (build-essential, from the apt layer at the top) is proven too.
+ARG RUST_VERSION=1.98.0
+ARG RUSTUP_VERSION=1.29.0
+ENV RUSTUP_HOME=/opt/rust/rustup \
+    CARGO_HOME=/home/claude/.cargo
+ENV PATH="/opt/rust/cargo/bin:${PATH}"
+RUN set -eux; \
+    dpkgArch="$(dpkg --print-architecture)"; \
+    case "$dpkgArch" in \
+      amd64) rustTarget='x86_64-unknown-linux-gnu' ;; \
+      arm64) rustTarget='aarch64-unknown-linux-gnu' ;; \
+      *) echo "unsupported architecture: $dpkgArch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/rustup-init \
+      "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/${rustTarget}/rustup-init"; \
+    chmod 755 /tmp/rustup-init; \
+    CARGO_HOME=/opt/rust/cargo /tmp/rustup-init -y --no-modify-path \
+      --default-toolchain "${RUST_VERSION}" \
+      --profile minimal \
+      --component rustfmt --component clippy --component rust-src; \
+    rm -f /tmp/rustup-init; \
+    chmod -R a+rX /opt/rust; \
+    install -d -o claude -g claude /home/claude/.cargo /home/claude/.cargo/bin; \
+    rustup --version; \
+    rustc --version; \
+    cargo --version; \
+    cargo fmt --version; \
+    cargo clippy --version; \
+    printf 'fn main() { println!("ok"); }\n' > /tmp/rust-smoke.rs; \
+    rustc -o /tmp/rust-smoke /tmp/rust-smoke.rs; \
+    /tmp/rust-smoke; \
+    rm -f /tmp/rust-smoke /tmp/rust-smoke.rs
+
 # Install Ruff (the Python linter/formatter) as a WHEEL into the system
 # interpreter, rather than as its standalone release tarball.
 #

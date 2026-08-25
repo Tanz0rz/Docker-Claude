@@ -31,13 +31,14 @@ find "$CLAUDE_HOME" -mindepth 1 \
   \( ! -user "$CLAUDE_UID" -o ! -group "$CLAUDE_GID" \) \
   -exec chown -h "$CLAUDE_UID:$CLAUDE_GID" {} + 2>/dev/null || true
 
-# Cache and GOPATH directories the image's ENV points at. Creating them here
-# means a volume that predates those settings still gets them, and the tools
-# never have to create them as a side effect of the first build.
+# Cache, GOPATH and CARGO_HOME directories the image's ENV points at. Creating
+# them here means a volume that predates those settings still gets them, and
+# the tools never have to create them as a side effect of the first build.
 gosu "$CLAUDE_USER" mkdir -p \
   "$CLAUDE_HOME/.cache/go-build" \
   "$CLAUDE_HOME/go/bin" \
-  "$CLAUDE_HOME/go/pkg/mod" 2>/dev/null || true
+  "$CLAUDE_HOME/go/pkg/mod" \
+  "$CLAUDE_HOME/.cargo/bin" 2>/dev/null || true
 
 # haxelib keeps its repository path in ~/.haxelib, which lives on the persistent
 # volume and so can outlive the directory it names — a session that ran
