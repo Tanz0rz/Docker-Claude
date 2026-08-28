@@ -285,6 +285,7 @@ HOST_MOUNTS+=(-v "$HOME/.codex/auth.json:/tmp/.host-codex-auth.json")
 # skips both files for sessions on untrusted code.
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/docker-claude"
 EXTRA_MOUNT_LINES=()
+EXTRA_MOUNT_SPECS=""
 add_mounts_from() {
   local file="$1" line host cont mode _
   [ -f "$file" ] || return 0
@@ -328,6 +329,7 @@ add_mounts_from() {
     esac
     HOST_MOUNTS+=(-v "$host:$cont${mode:+:$mode}")
     EXTRA_MOUNT_LINES+=("$host -> $cont${mode:+ ($mode)}")
+    EXTRA_MOUNT_SPECS="${EXTRA_MOUNT_SPECS:+$EXTRA_MOUNT_SPECS;}$cont:${mode:-rw}"
   done < "$file"
 }
 if [ "$EXTRA_MOUNTS" = true ]; then
@@ -337,6 +339,11 @@ fi
 
 # Pass auth environment variables into the container
 ENV_FLAGS=(-e "CONTAINER_AGENT=$AGENT" -e "GIT_ACCESS=$GIT_ACCESS")
+# Tell the agent what was mounted: the entrypoint turns this into a
+# /workspace/CLAUDE.md (and AGENTS.md) so it checks these paths before
+# downloading a dependency the host already has. Container path only — the
+# host side is irrelevant inside. Format: /path:ro;/other:rw
+ENV_FLAGS+=(-e "CONTAINER_MOUNTS=$EXTRA_MOUNT_SPECS")
 [ -n "${ANTHROPIC_API_KEY:-}" ] && ENV_FLAGS+=(-e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
 [ -n "${OPENAI_API_KEY:-}" ] && ENV_FLAGS+=(-e "OPENAI_API_KEY=$OPENAI_API_KEY")
 [ -n "${CLAUDE_CODE_USE_BEDROCK:-}" ] && ENV_FLAGS+=(-e "CLAUDE_CODE_USE_BEDROCK=$CLAUDE_CODE_USE_BEDROCK")

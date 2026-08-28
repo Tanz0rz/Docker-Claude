@@ -219,6 +219,7 @@ REM the home volume or the workspace are refused, and --no-mounts (or
 REM EXTRA_MOUNTS=0) skips both files for sessions on untrusted code.
 set CONFIG_DIR=%APPDATA%\docker-claude
 set EXTRA_MOUNT_COUNT=0
+set EXTRA_MOUNT_SPECS=
 if defined EXTRA_MOUNTS_ON (
     call :add_mounts_from "%CONFIG_DIR%\container-mounts"
     call :add_mounts_from ".container-mounts"
@@ -226,6 +227,10 @@ if defined EXTRA_MOUNTS_ON (
 
 REM Pass the selected agent, git-access flag, and any auth env vars into the container
 set ENV_FLAGS=-e CONTAINER_AGENT=%AGENT% -e GIT_ACCESS=%GIT_ACCESS_VALUE%
+REM Tell the agent what was mounted: the entrypoint turns this into a
+REM /workspace/CLAUDE.md (and AGENTS.md) so it checks these paths before
+REM downloading a dependency the host already has. Format: /path:ro;/other:rw
+set ENV_FLAGS=!ENV_FLAGS! -e "CONTAINER_MOUNTS=!EXTRA_MOUNT_SPECS!"
 if defined ANTHROPIC_API_KEY set ENV_FLAGS=!ENV_FLAGS! -e ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%
 if defined OPENAI_API_KEY set ENV_FLAGS=!ENV_FLAGS! -e OPENAI_API_KEY=%OPENAI_API_KEY%
 
@@ -404,6 +409,8 @@ if defined M_MODE if not defined M_SUFFIX (
 )
 set HOST_MOUNTS=!HOST_MOUNTS! -v "!M_HOST!:!M_CONT!!M_SUFFIX!"
 set /a EXTRA_MOUNT_COUNT+=1
+if defined M_SUFFIX (set M_SPEC=!M_CONT!:ro) else (set M_SPEC=!M_CONT!:rw)
+if defined EXTRA_MOUNT_SPECS (set EXTRA_MOUNT_SPECS=!EXTRA_MOUNT_SPECS!;!M_SPEC!) else (set EXTRA_MOUNT_SPECS=!M_SPEC!)
 if defined M_SUFFIX (
     set "EXTRA_MOUNT_!EXTRA_MOUNT_COUNT!=!M_HOST! -> !M_CONT! (ro)"
 ) else (

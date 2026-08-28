@@ -117,6 +117,37 @@ if [ "$GIT_ACCESS" = true ]; then
   chown "$CLAUDE_UID:$CLAUDE_GID" "$CLAUDE_HOME/.ssh/known_hosts" 2>/dev/null || true
 fi
 
+# Tell the agent which extra host directories the launcher bind-mounted, so it
+# looks there before downloading a dependency the host already has. Claude Code
+# reads CLAUDE.md from every ancestor of its cwd, and /workspace is the parent
+# of every project mount, so a file there reaches any project without touching
+# the project itself. AGENTS.md is the same text for Codex. CONTAINER_MOUNTS is
+# set by the run scripts as /path:ro;/other:rw (empty when nothing was mounted).
+{
+  echo "# Container mounts"
+  echo
+  if [ -n "${CONTAINER_MOUNTS:-}" ]; then
+    echo "The launcher bind-mounted these host directories into this container (from the"
+    echo "user's container-mounts files). Check them before cloning or downloading a"
+    echo "dependency — the host copy is meant to be used from here:"
+    echo
+    IFS=';' read -ra _mounts <<<"$CONTAINER_MOUNTS"
+    for m in "${_mounts[@]}"; do
+      echo "- \`${m%:*}\` (${m##*:})"
+    done
+  else
+    echo "No extra host directories are bind-mounted into this container. If a large"
+    echo "dependency (engine checkout, dataset, asset tree) would be better shared from"
+    echo "the host than downloaded here, tell the user: they can list it in"
+    echo "~/.config/docker-claude/container-mounts (or the project's .container-mounts)"
+    echo "and it will appear at the path they choose on the next launch."
+  fi
+  echo
+  echo "\$CONTAINER_MOUNTS holds the same list as \`/path:mode;...\`."
+} > /workspace/CLAUDE.md
+cp /workspace/CLAUDE.md /workspace/AGENTS.md
+chmod 644 /workspace/CLAUDE.md /workspace/AGENTS.md
+
 # Disable GPG signing — the host's signing key isn't available in the container
 gosu "$CLAUDE_USER" git config --global --unset commit.gpgsign 2>/dev/null || true
 gosu "$CLAUDE_USER" git config --global --unset user.signingkey 2>/dev/null || true

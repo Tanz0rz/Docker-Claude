@@ -305,6 +305,8 @@ One mount per line, whitespace-separated:
 
 The banner lists every mount that was applied, from both files. Since the repo-local file lives inside whatever repo you just cloned, check it before the first launch on unfamiliar code, or launch with `--no-mounts` (or `EXTRA_MOUNTS=0`) to ignore all of them. See [Security model](#security-model).
 
+The agent is told what was mounted: the entrypoint writes `/workspace/CLAUDE.md` (and `AGENTS.md` for Codex) listing every mounted path, and `$CONTAINER_MOUNTS` carries the same list as `/path:ro;/other:rw`. So an agent asked for Kha finds `/opt/Kha` listed there instead of cloning it. If it reports a path missing, look at the launch banner's `Mounts:` line — a warning there (host path absent, launcher not yet updated) is the usual cause.
+
 For the Kha example above, the project's build then references the mount directly (`node /opt/Kha/make html5`), and a fresh container starts with the engine already present.
 
 ## Updating
