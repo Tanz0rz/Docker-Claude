@@ -56,7 +56,7 @@ if defined SHOW_HELP (
     echo Launcher options - must come before the agent's arguments:
     echo   --no-git     Don't share git identity/credentials for this launch
     echo   --git        Force git access on ^(overrides the GIT_ACCESS env var^)
-    echo   --no-mounts  Ignore the project's .container-mounts file for this launch
+    echo   --no-mounts  Ignore all container-mounts files for this launch
     echo   --update     Pull the latest launcher source and agent release, then rebuild
     echo   -h, --help   Show this help
     echo   --           Stop parsing launcher options; pass the rest to %AGENT_LABEL%
@@ -79,9 +79,8 @@ if defined GIT_FLAG (
     if /i "%GIT_ACCESS%"=="no" set GIT_ACCESS_ON=
     if /i "%GIT_ACCESS%"=="off" set GIT_ACCESS_ON=
 )
-REM EXTRA_MOUNTS controls whether the project's .container-mounts file is
-REM honored (see the mounts block below). Default on; --no-mounts or
-REM EXTRA_MOUNTS=0 off.
+REM EXTRA_MOUNTS controls whether the container-mounts files are honored (see
+REM the mounts block below). Default on; --no-mounts or EXTRA_MOUNTS=0 off.
 if not defined EXTRA_MOUNTS set EXTRA_MOUNTS=1
 set EXTRA_MOUNTS_ON=1
 if defined NO_MOUNTS set EXTRA_MOUNTS_ON=
@@ -197,26 +196,36 @@ if not exist "%USERPROFILE%\.codex" mkdir "%USERPROFILE%\.codex"
 if not exist "%USERPROFILE%\.codex\auth.json" echo {}> "%USERPROFILE%\.codex\auth.json"
 set HOST_MOUNTS=!HOST_MOUNTS! -v "%USERPROFILE%\.codex\auth.json:/tmp/.host-codex-auth.json"
 
-REM Extra per-project bind mounts, declared in .container-mounts at the project
-REM root. Large one-off dependencies (a 1 GB engine checkout, a dataset, a
-REM shared asset tree) don't belong in the image, and re-cloning them into every
-REM fresh container is exactly the slow, network-bound step this file exists to
-REM skip: keep one copy on the host and bind it in per project.
+REM Extra bind mounts. Large one-off dependencies (a 1 GB engine checkout, a
+REM dataset, a shared asset tree) don't belong in the image, and re-cloning them
+REM into every fresh container is exactly the slow, network-bound step this
+REM exists to skip: keep one copy on the host and bind it in.
+REM
+REM Three files are read, in this order, each optional:
+REM   %APPDATA%\docker-claude\container-mounts                 every launch
+REM   %APPDATA%\docker-claude\container-mounts.d\<project>    this project, kept out of its repo
+REM   .\.container-mounts                                     this project, inside its repo
+REM where <project> is the directory name - the same name /workspace/<project>
+REM is derived from.
 REM
 REM One mount per line, whitespace-separated:  host_path [container_path] [ro]
 REM   ~/src/Kha        /opt/Kha   ro     (tilde, absolute, or project-relative)
 REM   ../shared-assets                   (-> /mnt/shared-assets, read-write)
-REM Blank lines and # comments are ignored; paths must not contain spaces. A
-REM missing host path is skipped with a warning rather than failing the launch.
+REM Relative host paths resolve against the project directory whichever file
+REM they come from. Blank lines and # comment lines are ignored; paths must not
+REM contain spaces. A missing host path is skipped with a warning rather than
+REM failing the launch.
 REM
-REM The file lives in the project - i.e. inside whatever repo you just cloned -
-REM so every mount it adds is printed in the banner, targets that would shadow
+REM The repo-local file lives inside whatever repo you just cloned, so every
+REM mount from any source is printed in the banner, targets that would shadow
 REM the home volume or the workspace are refused, and --no-mounts (or
-REM EXTRA_MOUNTS=0) ignores the file entirely for sessions on untrusted code.
-set MOUNTS_FILE=.container-mounts
+REM EXTRA_MOUNTS=0) skips all three files for sessions on untrusted code.
+set CONFIG_DIR=%APPDATA%\docker-claude
 set EXTRA_MOUNT_COUNT=0
-if defined EXTRA_MOUNTS_ON if exist "%MOUNTS_FILE%" (
-    for /f "usebackq eol=# tokens=1,2,3" %%A in ("%MOUNTS_FILE%") do call :add_mount "%%~A" "%%~B" "%%~C"
+if defined EXTRA_MOUNTS_ON (
+    call :add_mounts_from "%CONFIG_DIR%\container-mounts"
+    call :add_mounts_from "%CONFIG_DIR%\container-mounts.d\%PROJECT_NAME%"
+    call :add_mounts_from ".container-mounts"
 )
 
 REM Pass the selected agent, git-access flag, and any auth env vars into the container
@@ -271,9 +280,9 @@ echo   Auth:        %AUTH_STATUS%
 echo   Workspace:   %cd% -^> %WORKSPACE_PATH%
 echo   Home volume: %VOLUME_NAME% (persistent)
 if not defined EXTRA_MOUNTS_ON (
-    echo   Mounts:      off ^(.container-mounts ignored^)
+    echo   Mounts:      off ^(container-mounts files ignored^)
 ) else if "!EXTRA_MOUNT_COUNT!"=="0" (
-    echo   Mounts:      none ^(add a .container-mounts file to bind host dirs in^)
+    echo   Mounts:      none ^(.container-mounts or %CONFIG_DIR%\container-mounts[.d\%PROJECT_NAME%]^)
 ) else (
     for /l %%N in (1,1,!EXTRA_MOUNT_COUNT!) do (
         if %%N==1 ( echo   Mounts:      !EXTRA_MOUNT_%%N! ) else ( echo                !EXTRA_MOUNT_%%N! )
@@ -343,7 +352,14 @@ if "!SRC_BEFORE!"=="!SRC_AFTER!" (
 exit /b 0
 
 REM ---------------------------------------------------------------------------
-REM Append one .container-mounts entry to HOST_MOUNTS. Args: host [container] [mode].
+REM Read one mounts file (if it exists) and append its entries to HOST_MOUNTS.
+:add_mounts_from
+set MOUNTS_FILE=%~1
+if not exist "%MOUNTS_FILE%" exit /b 0
+for /f "usebackq eol=# tokens=1,2,3" %%A in ("%MOUNTS_FILE%") do call :add_mount "%%~A" "%%~B" "%%~C"
+exit /b 0
+
+REM Append one mounts entry to HOST_MOUNTS. Args: host [container] [mode].
 :add_mount
 set M_HOST=%~1
 set M_CONT=%~2

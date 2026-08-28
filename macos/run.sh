@@ -45,7 +45,7 @@ $LAUNCHER runs $AGENT_LABEL in an isolated container (see README for details).
 Launcher options — must come before the agent's arguments:
   --no-git     Don't share git identity/credentials for this launch
   --git        Force git access on (overrides the GIT_ACCESS env var)
-  --no-mounts  Ignore the project's .container-mounts file for this launch
+  --no-mounts  Ignore all container-mounts files for this launch
   --update     Pull the latest launcher source and agent release, then rebuild
   -h, --help   Show this help
   --           Stop parsing launcher options; pass the rest to $AGENT_LABEL
@@ -70,8 +70,8 @@ else
   esac
 fi
 
-# EXTRA_MOUNTS controls whether the project's .container-mounts file is honored
-# (see the mounts block below). Default on; --no-mounts or EXTRA_MOUNTS=0 off.
+# EXTRA_MOUNTS controls whether the container-mounts files are honored (see the
+# mounts block below). Default on; --no-mounts or EXTRA_MOUNTS=0 off.
 if [ "$NO_MOUNTS" = true ]; then
   EXTRA_MOUNTS=false
 else
@@ -261,26 +261,35 @@ mkdir -p "$HOME/.codex"
 [ ! -f "$HOME/.codex/auth.json" ] && echo '{}' > "$HOME/.codex/auth.json"
 HOST_MOUNTS+=(-v "$HOME/.codex/auth.json:/tmp/.host-codex-auth.json")
 
-# Extra per-project bind mounts, declared in .container-mounts at the project
-# root. Large one-off dependencies (a 1 GB engine checkout, a dataset, a shared
-# asset tree) don't belong in the image, and re-cloning them into every fresh
-# container is exactly the slow, network-bound step this file exists to skip:
-# keep one copy on the host and bind it in per project.
+# Extra bind mounts. Large one-off dependencies (a 1 GB engine checkout, a
+# dataset, a shared asset tree) don't belong in the image, and re-cloning them
+# into every fresh container is exactly the slow, network-bound step this
+# exists to skip: keep one copy on the host and bind it in.
+#
+# Three files are read, in this order, each optional:
+#   $CONFIG_DIR/container-mounts                  every launch, any project
+#   $CONFIG_DIR/container-mounts.d/<project>      this project, kept out of its repo
+#   ./.container-mounts                           this project, inside its repo
+# where CONFIG_DIR is ${XDG_CONFIG_HOME:-~/.config}/docker-claude and <project>
+# is the directory name — the same name /workspace/<project> is derived from.
 #
 # One mount per line, whitespace-separated:  host_path [container_path] [ro]
 #   ~/src/Kha        /opt/Kha   ro     # tilde, absolute, or project-relative
 #   ../shared-assets                   # -> /mnt/shared-assets, read-write
-# Blank lines and # comments are ignored. A missing host path is skipped with a
-# warning rather than failing the launch, so the file can be committed and
-# still work on a machine that lacks one of the paths.
+# Relative host paths resolve against the project directory whichever file they
+# come from. Blank lines and # comments are ignored. A missing host path is
+# skipped with a warning rather than failing the launch, so a committed file
+# still works on a machine that lacks one of the paths.
 #
-# The file lives in the project — i.e. inside whatever repo you just cloned —
-# so every mount it adds is printed in the banner, targets that would shadow
-# the home volume or the workspace are refused, and --no-mounts (or
-# EXTRA_MOUNTS=0) ignores the file entirely for sessions on untrusted code.
-MOUNTS_FILE=".container-mounts"
+# The repo-local file lives inside whatever repo you just cloned, so every
+# mount from any source is printed in the banner, targets that would shadow the
+# home volume or the workspace are refused, and --no-mounts (or EXTRA_MOUNTS=0)
+# skips all three files for sessions on untrusted code.
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/docker-claude"
 EXTRA_MOUNT_LINES=()
-if [ "$EXTRA_MOUNTS" = true ] && [ -f "$MOUNTS_FILE" ]; then
+add_mounts_from() {
+  local file="$1" line host cont mode _
+  [ -f "$file" ] || return 0
   while IFS= read -r line || [ -n "$line" ]; do
     line="${line%$'\r'}"
     line="${line%%#*}"
@@ -293,7 +302,7 @@ if [ "$EXTRA_MOUNTS" = true ] && [ -f "$MOUNTS_FILE" ]; then
       *)     host="$(pwd)/$host" ;;
     esac
     if [ ! -e "$host" ]; then
-      echo "Warning: $MOUNTS_FILE: $host does not exist — skipped." >&2
+      echo "Warning: $file: $host does not exist — skipped." >&2
       continue
     fi
     # Normalize to an absolute, symlink-free path: the runtime wants one, and
@@ -308,20 +317,25 @@ if [ "$EXTRA_MOUNTS" = true ] && [ -f "$MOUNTS_FILE" ]; then
     [ -n "${cont:-}" ] || cont="/mnt/$(basename "$host")"
     case "$cont" in
       /*) ;;
-      *)  echo "Warning: $MOUNTS_FILE: container path '$cont' is not absolute — skipped." >&2; continue ;;
+      *)  echo "Warning: $file: container path '$cont' is not absolute — skipped." >&2; continue ;;
     esac
     case "$cont" in
       /|/home/claude|/home/claude/*|/workspace|"$WORKSPACE_PATH"|"$WORKSPACE_PATH"/*)
-        echo "Warning: $MOUNTS_FILE: refusing to mount over '$cont' (home volume or workspace) — skipped." >&2; continue ;;
+        echo "Warning: $file: refusing to mount over '$cont' (home volume or workspace) — skipped." >&2; continue ;;
     esac
     case "${mode:-}" in
       ''|rw) mode="" ;;
       ro)    ;;
-      *)     echo "Warning: $MOUNTS_FILE: unknown mode '$mode' (expected ro or rw) — skipped." >&2; continue ;;
+      *)     echo "Warning: $file: unknown mode '$mode' (expected ro or rw) — skipped." >&2; continue ;;
     esac
     HOST_MOUNTS+=(-v "$host:$cont${mode:+:$mode}")
     EXTRA_MOUNT_LINES+=("$host -> $cont${mode:+ ($mode)}")
-  done < "$MOUNTS_FILE"
+  done < "$file"
+}
+if [ "$EXTRA_MOUNTS" = true ]; then
+  add_mounts_from "$CONFIG_DIR/container-mounts"
+  add_mounts_from "$CONFIG_DIR/container-mounts.d/$PROJECT_NAME"
+  add_mounts_from ".container-mounts"
 fi
 
 # Pass auth environment variables into the container
@@ -364,9 +378,9 @@ echo "  Auth:        $AUTH_STATUS"
 echo "  Workspace:   $(pwd) -> $WORKSPACE_PATH"
 echo "  Home volume: $VOLUME_NAME (persistent)"
 if [ "$EXTRA_MOUNTS" != true ]; then
-  echo "  Mounts:      off (.container-mounts ignored)"
+  echo "  Mounts:      off (container-mounts files ignored)"
 elif [ ${#EXTRA_MOUNT_LINES[@]} -eq 0 ]; then
-  echo "  Mounts:      none (add a .container-mounts file to bind host dirs in)"
+  echo "  Mounts:      none (.container-mounts or $CONFIG_DIR/container-mounts[.d/$PROJECT_NAME])"
 else
   echo "  Mounts:      ${EXTRA_MOUNT_LINES[0]}"
   for m in "${EXTRA_MOUNT_LINES[@]:1}"; do echo "               $m"; done
