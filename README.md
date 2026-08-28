@@ -64,6 +64,7 @@ flags.
 |---|---|
 | `--no-git` | Withhold git identity and credentials for this launch (same as `GIT_ACCESS=0`). |
 | `--git` | Force git access on for this launch, overriding the `GIT_ACCESS` env var. |
+| `--no-mounts` | Ignore the project's `.container-mounts` file for this launch (same as `EXTRA_MOUNTS=0`). See [Bind a host directory in](#3-bind-a-host-directory-in-per-project-no-rebuild). |
 | `--update` | Pull the latest launcher source and agent release, rebuild the image, then launch. |
 | `-h`, `--help` | Show the launcher's help. |
 | `--` | Stop parsing launcher options; pass everything after straight to the agent. |
@@ -81,12 +82,13 @@ ccodex -- --help                # reach Codex's own help (see the first line of 
 |---|---|---|
 | `AGENT` | `claude` | Which agent to run: `claude` or `codex`. The `ccodex` launcher just sets `AGENT=codex`. |
 | `GIT_ACCESS` | `1` | Whether the host's git identity and credentials (gitconfig, SSH keys, gh token/config) are shared. Set `0`/`false`/`no`/`off` to withhold them — and scrub any left in the volume by a prior run. A `--git`/`--no-git` option overrides this. |
+| `EXTRA_MOUNTS` | `1` | Whether the project's `.container-mounts` file is honored. Set `0`/`false`/`no`/`off` to launch with none of its mounts. `--no-mounts` is the same thing. |
 
 ## What's isolated
 
 | | Host | Container |
 |---|---|---|
-| Filesystem | Protected | Only `/workspace` (your project) is mounted |
+| Filesystem | Protected | Only `/workspace` (your project) is mounted, plus any directories the project's `.container-mounts` file opts in |
 | Processes | Protected | No access to host processes |
 | Network | Protected | Outbound web access only (bridge mode) |
 | Privilege escalation | Protected | Runs as the unprivileged `claude` user; capabilities dropped bar the five the entrypoint's root stage needs, plus no-new-privileges |
@@ -97,6 +99,7 @@ ccodex -- --help                # reach Codex's own help (see the first line of 
 - **SSH keys** — Copied from host at startup for private repo access (unless `GIT_ACCESS=0`)
 - **Auth** — The host's `~/.claude` and `~/.codex` are shared so logins and token refreshes persist in both directions (host and container). `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are forwarded when set. (Agent auth is always shared — it is not affected by `GIT_ACCESS`.)
 - **Project directory** — Read-write mount of your current directory
+- **Extra host directories** — Whatever the project's `.container-mounts` file lists, bind-mounted at the paths it names (see [Bind a host directory in](#3-bind-a-host-directory-in-per-project-no-rebuild)); each one is printed in the launch banner
 - **Clipboard (Linux/Wayland only)** — The Wayland compositor socket is mounted so image paste (ctrl+v) works in the TUI
 
 ## Go, Ruff & pytest
@@ -230,7 +233,7 @@ Python Playwright is not preinstalled, but `pip install playwright==1.62.1` in a
 
 > The `cclaude` and `ccodex` commands are the launchers installed by the [one-line installer](#quick-start) (or set up manually per the OS guide). Both wrap this repo's `run.sh` / `run.bat`, with `ccodex` setting `AGENT=codex`.
 
-The container comes with common dev tools (git, curl, jq, python3 + pip, build-essential, cmake, clang, Go + linters, Rust, Ruff, pytest, Haxe + HashLink, ffmpeg + PulseAudio, Playwright + Chromium + Firefox). When Claude needs something else, there are two approaches:
+The container comes with common dev tools (git, curl, jq, python3 + pip, build-essential, cmake, clang, Go + linters, Rust, Ruff, pytest, Haxe + HashLink, ffmpeg + PulseAudio, Playwright + Chromium + Firefox). When Claude needs something else, there are three approaches:
 
 ### 1. Add to the Containerfile (permanent)
 
@@ -272,6 +275,28 @@ The conventional user-level bin directories are already on `PATH`, so a tool ins
 | `~/go/bin` | `go install` (it is `$GOPATH/bin`) |
 
 This matters because the agent is `exec`'d directly rather than through a login shell: the `source ~/.profile` line installers like rustup append to your shell config is never read, so without those entries the binaries would be invisible despite installing fine. They are appended *after* the image's own directories, so an image-owned tool always wins over a stale copy in the volume.
+
+### 3. Bind a host directory in (per project, no rebuild)
+
+Some dependencies are too big for either of the above: a multi-gigabyte engine checkout, a dataset, an asset tree shared between projects. Baking one into the image makes every rebuild download it again; cloning it into the volume or the workspace repeats that per machine and bloats the project. Instead, keep one copy on the host and bind it into the container per project.
+
+Drop a `.container-mounts` file in the project root — one mount per line, whitespace-separated:
+
+```
+# host_path        [container_path]   [ro]
+~/src/Kha          /opt/Kha           ro     # a pinned Kode/Kha checkout, ~1.2 GB
+../shared-assets                             # -> /mnt/shared-assets, read-write
+```
+
+- The host path may be absolute, `~/…`, or relative to the project directory. On Windows, `~` expands to `%USERPROFILE%` and forward slashes work.
+- The container path defaults to `/mnt/<basename>` when omitted. It must be absolute; the launcher refuses anything under `/home/claude` or the workspace, since that would shadow the volume or the project.
+- `ro` mounts read-only; the default is read-write.
+- Blank lines and `#` comments are ignored. Paths with spaces are not supported.
+- A host path that doesn't exist is skipped with a warning rather than aborting the launch, so the file can be committed and still work on a machine that lacks one of the paths. Prefer `~/…` and relative paths over absolute ones for the same reason.
+
+The banner lists every mount that was applied. Since the file lives inside the project — i.e. inside whatever repo you just cloned — check it before the first launch on unfamiliar code, or launch with `--no-mounts` (or `EXTRA_MOUNTS=0`) to ignore it. See [Security model](#security-model).
+
+For the Kha example above, the project's build then references the mount directly (`node /opt/Kha/make html5`), and a fresh container starts with the engine already present.
 
 ## Updating
 
@@ -343,12 +368,14 @@ The container significantly reduces the blast radius of running these agents wit
 - **Modify or delete your project files** — the project directory is mounted read-write, so anything in the directory you launch from is fully accessible
 - **Read your SSH keys and Git config** — these are mounted read-only, but a rogue agent could still read them and exfiltrate them over the network
 - **Read your GitHub CLI tokens** — the `gh` config directory is mounted read-only for the same reason
+- **Reach whatever `.container-mounts` grants** — a repo can ship that file, and it can name any host directory, including a sensitive one. The launcher prints each mount in the banner and refuses targets that would shadow the home volume or workspace, but it does not judge the host side; read the file before launching on untrusted code, or use `--no-mounts`
 - **Make network requests** — outbound network access is required for the Claude API but also means the container can reach arbitrary endpoints
 - **Read and write your clipboard (Linux/Wayland)** — the Wayland socket is mounted for image paste, which also allows clipboard access and opening windows. Wayland's client isolation prevents input snooping; for this reason the X11 socket (which would allow keylogging) is never mounted. Remove the `WAYLAND_DISPLAY` block in `linux/run.sh` to opt out
 
 ### Hardening tips
 
 - **Mount the project read-only** for review-only sessions: change the project mount in your run script to `"$(pwd):$WORKSPACE_PATH:ro"`
+- **Ignore the project's mounts** on code you haven't read yet: `cclaude --no-mounts` skips `.container-mounts` entirely. The banner shows whether mounts are on, off, or none.
 - **Withhold git access** if you don't need private repo access: launch with `--no-git` (e.g. `cclaude --no-git`, or the equivalent `GIT_ACCESS=0 cclaude`). No gitconfig, SSH keys, or gh token are shared, and any cached in the volume from a prior run are scrubbed. The launch banner shows whether git access is on or off.
 - **Commit before launching** so you can easily revert any unwanted changes with `git checkout .`
 

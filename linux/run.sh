@@ -20,12 +20,14 @@ esac
 # untouched — so the agent's own flags never clash with the launcher's.
 FORCE_UPDATE=false
 GIT_FLAG=""
+NO_MOUNTS=false
 SHOW_HELP=false
 while [ $# -gt 0 ]; do
   case "$1" in
     --update)  FORCE_UPDATE=true ;;
     --git)     GIT_FLAG=true ;;
     --no-git)  GIT_FLAG=false ;;
+    --no-mounts) NO_MOUNTS=true ;;
     -h|--help) SHOW_HELP=true ;;
     --)        shift; break ;;
     *)         break ;;
@@ -43,12 +45,14 @@ $LAUNCHER runs $AGENT_LABEL in an isolated container (see README for details).
 Launcher options — must come before the agent's arguments:
   --no-git     Don't share git identity/credentials for this launch
   --git        Force git access on (overrides the GIT_ACCESS env var)
+  --no-mounts  Ignore the project's .container-mounts file for this launch
   --update     Pull the latest launcher source and agent release, then rebuild
   -h, --help   Show this help
   --           Stop parsing launcher options; pass the rest to $AGENT_LABEL
 
 Anything the launcher doesn't recognize is forwarded to $AGENT_LABEL.
 Env equivalents:  GIT_ACCESS=0|1 (git access)   AGENT=claude|codex (which agent)
+                  EXTRA_MOUNTS=0|1 (.container-mounts)
 EOF
   exit 0
 fi
@@ -63,6 +67,17 @@ else
   case "${GIT_ACCESS:-1}" in
     0|false|no|off|FALSE|NO|OFF) GIT_ACCESS=false ;;
     *) GIT_ACCESS=true ;;
+  esac
+fi
+
+# EXTRA_MOUNTS controls whether the project's .container-mounts file is honored
+# (see the mounts block below). Default on; --no-mounts or EXTRA_MOUNTS=0 off.
+if [ "$NO_MOUNTS" = true ]; then
+  EXTRA_MOUNTS=false
+else
+  case "${EXTRA_MOUNTS:-1}" in
+    0|false|no|off|FALSE|NO|OFF) EXTRA_MOUNTS=false ;;
+    *) EXTRA_MOUNTS=true ;;
   esac
 fi
 
@@ -232,6 +247,69 @@ HOST_MOUNTS+=(-v "$HOME/.claude:/home/claude/.claude")
 mkdir -p "$HOME/.codex"
 HOST_MOUNTS+=(-v "$HOME/.codex:/home/claude/.codex")
 
+# Extra per-project bind mounts, declared in .container-mounts at the project
+# root. Large one-off dependencies (a 1 GB engine checkout, a dataset, a shared
+# asset tree) don't belong in the image, and re-cloning them into every fresh
+# container is exactly the slow, network-bound step this file exists to skip:
+# keep one copy on the host and bind it in per project.
+#
+# One mount per line, whitespace-separated:  host_path [container_path] [ro]
+#   ~/src/Kha        /opt/Kha   ro     # tilde, absolute, or project-relative
+#   ../shared-assets                   # -> /mnt/shared-assets, read-write
+# Blank lines and # comments are ignored. A missing host path is skipped with a
+# warning rather than failing the launch, so the file can be committed and
+# still work on a machine that lacks one of the paths.
+#
+# The file lives in the project — i.e. inside whatever repo you just cloned —
+# so every mount it adds is printed in the banner, targets that would shadow
+# the home volume or the workspace are refused, and --no-mounts (or
+# EXTRA_MOUNTS=0) ignores the file entirely for sessions on untrusted code.
+MOUNTS_FILE=".container-mounts"
+EXTRA_MOUNT_LINES=()
+if [ "$EXTRA_MOUNTS" = true ] && [ -f "$MOUNTS_FILE" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    line="${line%%#*}"
+    read -r host cont mode _ <<<"$line"
+    [ -n "${host:-}" ] || continue
+    case "$host" in
+      '~')   host="$HOME" ;;
+      '~/'*) host="$HOME/${host#\~/}" ;;
+      /*)    ;;
+      *)     host="$(pwd)/$host" ;;
+    esac
+    if [ ! -e "$host" ]; then
+      echo "Warning: $MOUNTS_FILE: $host does not exist — skipped." >&2
+      continue
+    fi
+    # Normalize to an absolute, symlink-free path: the runtime wants one, and
+    # it's what the banner should show.
+    if [ -d "$host" ]; then
+      host="$(cd "$host" && pwd -P)"
+    else
+      host="$(cd "$(dirname "$host")" && pwd -P)/$(basename "$host")"
+    fi
+    # "host ro" — mode given without a container path.
+    if [ "${cont:-}" = ro ] || [ "${cont:-}" = rw ]; then mode="$cont"; cont=""; fi
+    [ -n "${cont:-}" ] || cont="/mnt/$(basename "$host")"
+    case "$cont" in
+      /*) ;;
+      *)  echo "Warning: $MOUNTS_FILE: container path '$cont' is not absolute — skipped." >&2; continue ;;
+    esac
+    case "$cont" in
+      /|/home/claude|/home/claude/*|/workspace|"$WORKSPACE_PATH"|"$WORKSPACE_PATH"/*)
+        echo "Warning: $MOUNTS_FILE: refusing to mount over '$cont' (home volume or workspace) — skipped." >&2; continue ;;
+    esac
+    case "${mode:-}" in
+      ''|rw) mode="" ;;
+      ro)    ;;
+      *)     echo "Warning: $MOUNTS_FILE: unknown mode '$mode' (expected ro or rw) — skipped." >&2; continue ;;
+    esac
+    HOST_MOUNTS+=(-v "$host:$cont${mode:+:$mode}")
+    EXTRA_MOUNT_LINES+=("$host -> $cont${mode:+ ($mode)}")
+  done < "$MOUNTS_FILE"
+fi
+
 # Pass auth environment variables into the container
 ENV_FLAGS=(-e "CONTAINER_AGENT=$AGENT" -e "GIT_ACCESS=$GIT_ACCESS")
 [ -n "${ANTHROPIC_API_KEY:-}" ] && ENV_FLAGS+=(-e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
@@ -294,6 +372,14 @@ echo "  Auth:        $AUTH_STATUS"
 echo "  Clipboard:   $CLIPBOARD_STATUS"
 echo "  Workspace:   $(pwd) -> $WORKSPACE_PATH"
 echo "  Home volume: $VOLUME_NAME (persistent)"
+if [ "$EXTRA_MOUNTS" != true ]; then
+  echo "  Mounts:      off (.container-mounts ignored)"
+elif [ ${#EXTRA_MOUNT_LINES[@]} -eq 0 ]; then
+  echo "  Mounts:      none (add a .container-mounts file to bind host dirs in)"
+else
+  echo "  Mounts:      ${EXTRA_MOUNT_LINES[0]}"
+  for m in "${EXTRA_MOUNT_LINES[@]:1}"; do echo "               $m"; done
+fi
 echo "  Update:      $LAUNCHER --update   pulls the latest source + release, rebuilds"
 echo "──────────────────────────────────────────────────────────────"
 

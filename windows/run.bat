@@ -25,6 +25,7 @@ REM literal --) ends parsing, and the rest is forwarded to the agent untouched,
 REM so the agent's own flags never clash with the launcher's.
 set FORCE_UPDATE=
 set GIT_FLAG=
+set NO_MOUNTS=
 set SHOW_HELP=
 set RUN_ARGS=
 :parse_args
@@ -32,6 +33,7 @@ if "%~1"=="" goto parse_done
 if /i "%~1"=="--update" (set FORCE_UPDATE=1& shift& goto parse_args)
 if /i "%~1"=="--git" (set GIT_FLAG=on& shift& goto parse_args)
 if /i "%~1"=="--no-git" (set GIT_FLAG=off& shift& goto parse_args)
+if /i "%~1"=="--no-mounts" (set NO_MOUNTS=1& shift& goto parse_args)
 if /i "%~1"=="--help" (set SHOW_HELP=1& goto parse_done)
 if /i "%~1"=="-h" (set SHOW_HELP=1& goto parse_done)
 if "%~1"=="--" (shift& goto collect_args)
@@ -54,11 +56,12 @@ if defined SHOW_HELP (
     echo Launcher options - must come before the agent's arguments:
     echo   --no-git     Don't share git identity/credentials for this launch
     echo   --git        Force git access on ^(overrides the GIT_ACCESS env var^)
+    echo   --no-mounts  Ignore the project's .container-mounts file for this launch
     echo   --update     Pull the latest launcher source and agent release, then rebuild
     echo   -h, --help   Show this help
     echo   --           Stop parsing launcher options; pass the rest to %AGENT_LABEL%
     echo(
-    echo Env equivalents:  GIT_ACCESS=0^|1   AGENT=claude^|codex
+    echo Env equivalents:  GIT_ACCESS=0^|1   AGENT=claude^|codex   EXTRA_MOUNTS=0^|1
     exit /b 0
 )
 
@@ -76,6 +79,17 @@ if defined GIT_FLAG (
     if /i "%GIT_ACCESS%"=="no" set GIT_ACCESS_ON=
     if /i "%GIT_ACCESS%"=="off" set GIT_ACCESS_ON=
 )
+REM EXTRA_MOUNTS controls whether the project's .container-mounts file is
+REM honored (see the mounts block below). Default on; --no-mounts or
+REM EXTRA_MOUNTS=0 off.
+if not defined EXTRA_MOUNTS set EXTRA_MOUNTS=1
+set EXTRA_MOUNTS_ON=1
+if defined NO_MOUNTS set EXTRA_MOUNTS_ON=
+if /i "%EXTRA_MOUNTS%"=="0" set EXTRA_MOUNTS_ON=
+if /i "%EXTRA_MOUNTS%"=="false" set EXTRA_MOUNTS_ON=
+if /i "%EXTRA_MOUNTS%"=="no" set EXTRA_MOUNTS_ON=
+if /i "%EXTRA_MOUNTS%"=="off" set EXTRA_MOUNTS_ON=
+
 if defined GIT_ACCESS_ON (
     set GIT_ACCESS_VALUE=true
     set GIT_STATUS=ON  - gitconfig, SSH keys, gh token shared
@@ -183,6 +197,28 @@ if not exist "%USERPROFILE%\.codex" mkdir "%USERPROFILE%\.codex"
 if not exist "%USERPROFILE%\.codex\auth.json" echo {}> "%USERPROFILE%\.codex\auth.json"
 set HOST_MOUNTS=!HOST_MOUNTS! -v "%USERPROFILE%\.codex\auth.json:/tmp/.host-codex-auth.json"
 
+REM Extra per-project bind mounts, declared in .container-mounts at the project
+REM root. Large one-off dependencies (a 1 GB engine checkout, a dataset, a
+REM shared asset tree) don't belong in the image, and re-cloning them into every
+REM fresh container is exactly the slow, network-bound step this file exists to
+REM skip: keep one copy on the host and bind it in per project.
+REM
+REM One mount per line, whitespace-separated:  host_path [container_path] [ro]
+REM   ~/src/Kha        /opt/Kha   ro     (tilde, absolute, or project-relative)
+REM   ../shared-assets                   (-> /mnt/shared-assets, read-write)
+REM Blank lines and # comments are ignored; paths must not contain spaces. A
+REM missing host path is skipped with a warning rather than failing the launch.
+REM
+REM The file lives in the project - i.e. inside whatever repo you just cloned -
+REM so every mount it adds is printed in the banner, targets that would shadow
+REM the home volume or the workspace are refused, and --no-mounts (or
+REM EXTRA_MOUNTS=0) ignores the file entirely for sessions on untrusted code.
+set MOUNTS_FILE=.container-mounts
+set EXTRA_MOUNT_COUNT=0
+if defined EXTRA_MOUNTS_ON if exist "%MOUNTS_FILE%" (
+    for /f "usebackq eol=# tokens=1,2,3" %%A in ("%MOUNTS_FILE%") do call :add_mount "%%~A" "%%~B" "%%~C"
+)
+
 REM Pass the selected agent, git-access flag, and any auth env vars into the container
 set ENV_FLAGS=-e CONTAINER_AGENT=%AGENT% -e GIT_ACCESS=%GIT_ACCESS_VALUE%
 if defined ANTHROPIC_API_KEY set ENV_FLAGS=!ENV_FLAGS! -e ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%
@@ -234,6 +270,15 @@ echo   Agent:       %AGENT_LABEL%   (switch with AGENT=claude^|codex)
 echo   Auth:        %AUTH_STATUS%
 echo   Workspace:   %cd% -^> %WORKSPACE_PATH%
 echo   Home volume: %VOLUME_NAME% (persistent)
+if not defined EXTRA_MOUNTS_ON (
+    echo   Mounts:      off ^(.container-mounts ignored^)
+) else if "!EXTRA_MOUNT_COUNT!"=="0" (
+    echo   Mounts:      none ^(add a .container-mounts file to bind host dirs in^)
+) else (
+    for /l %%N in (1,1,!EXTRA_MOUNT_COUNT!) do (
+        if %%N==1 ( echo   Mounts:      !EXTRA_MOUNT_%%N! ) else ( echo                !EXTRA_MOUNT_%%N! )
+    )
+)
 echo   Update:      %LAUNCHER% --update   pulls the latest source + release, rebuilds
 echo --------------------------------------------------------------
 
@@ -294,5 +339,62 @@ if "!SRC_BEFORE!"=="!SRC_AFTER!" (
     echo Source: already current ^(!SRC_AFTER!^).
 ) else (
     echo Source: updated !SRC_BEFORE! -^> !SRC_AFTER!.
+)
+exit /b 0
+
+REM ---------------------------------------------------------------------------
+REM Append one .container-mounts entry to HOST_MOUNTS. Args: host [container] [mode].
+:add_mount
+set M_HOST=%~1
+set M_CONT=%~2
+set M_MODE=%~3
+if not defined M_HOST exit /b 0
+REM "host ro" - mode given without a container path.
+if /i "!M_CONT!"=="ro" (set M_MODE=ro& set M_CONT=)
+if /i "!M_CONT!"=="rw" (set M_MODE=rw& set M_CONT=)
+REM Expand ~ and resolve project-relative paths against the current directory.
+if "!M_HOST!"=="~" set M_HOST=%USERPROFILE%
+if "!M_HOST:~0,2!"=="~/" set M_HOST=%USERPROFILE%\!M_HOST:~2!
+if "!M_HOST:~0,2!"=="~\" set M_HOST=%USERPROFILE%\!M_HOST:~2!
+set M_ABS=
+if "!M_HOST:~1,1!"==":" set M_ABS=1
+if "!M_HOST:~0,1!"=="\" set M_ABS=1
+if not defined M_ABS set M_HOST=%cd%\!M_HOST!
+if not exist "!M_HOST!" (
+    echo Warning: %MOUNTS_FILE%: !M_HOST! does not exist - skipped. >&2
+    exit /b 0
+)
+for %%P in ("!M_HOST!") do (
+    set M_HOST=%%~fP
+    if not defined M_CONT set M_CONT=/mnt/%%~nxP
+)
+if not "!M_CONT:~0,1!"=="/" (
+    echo Warning: %MOUNTS_FILE%: container path '!M_CONT!' is not absolute - skipped. >&2
+    exit /b 0
+)
+set M_BAD=
+if "!M_CONT!"=="/" set M_BAD=1
+if "!M_CONT!"=="/home/claude" set M_BAD=1
+if "!M_CONT:~0,13!"=="/home/claude/" set M_BAD=1
+if "!M_CONT!"=="/workspace" set M_BAD=1
+if "!M_CONT!"=="%WORKSPACE_PATH%" set M_BAD=1
+if "!M_CONT:%WORKSPACE_PATH%/=!" neq "!M_CONT!" set M_BAD=1
+if defined M_BAD (
+    echo Warning: %MOUNTS_FILE%: refusing to mount over '!M_CONT!' ^(home volume or workspace^) - skipped. >&2
+    exit /b 0
+)
+set M_SUFFIX=
+if /i "!M_MODE!"=="ro" set M_SUFFIX=:ro
+if /i "!M_MODE!"=="rw" set M_MODE=
+if defined M_MODE if not defined M_SUFFIX (
+    echo Warning: %MOUNTS_FILE%: unknown mode '!M_MODE!' ^(expected ro or rw^) - skipped. >&2
+    exit /b 0
+)
+set HOST_MOUNTS=!HOST_MOUNTS! -v "!M_HOST!:!M_CONT!!M_SUFFIX!"
+set /a EXTRA_MOUNT_COUNT+=1
+if defined M_SUFFIX (
+    set "EXTRA_MOUNT_!EXTRA_MOUNT_COUNT!=!M_HOST! -> !M_CONT! (ro)"
+) else (
+    set "EXTRA_MOUNT_!EXTRA_MOUNT_COUNT!=!M_HOST! -> !M_CONT!"
 )
 exit /b 0
