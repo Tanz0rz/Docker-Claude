@@ -34,6 +34,61 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
   && apt-get update && apt-get install -y --no-install-recommends gh \
   && rm -rf /var/lib/apt/lists/*
 
+# Build tools, HashLink/Kinc -dev headers, audio capture (PulseAudio, ffmpeg)
+# and xdotool.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake \
+    pkg-config \
+    clang \
+    libpng-dev \
+    libturbojpeg0-dev \
+    libsdl2-dev \
+    libgl1-mesa-dev \
+    libopenal-dev \
+    libmbedtls-dev \
+    libuv1-dev \
+    libvorbis-dev \
+    libsqlite3-dev \
+    zlib1g-dev \
+    libx11-dev \
+    libxinerama-dev \
+    libxrandr-dev \
+    libxcursor-dev \
+    libxi-dev \
+    libxkbcommon-dev \
+    libasound2-dev \
+    libudev-dev \
+    libwayland-dev \
+    wayland-protocols \
+    libvulkan-dev \
+    pulseaudio \
+    pulseaudio-utils \
+    libasound2-plugins \
+    ffmpeg \
+    xdotool \
+  && rm -rf /var/lib/apt/lists/*
+
+# HashLink, built from source at a pinned commit into /usr/local. The `hl`
+# VM is x86-64 only; arm64 gets libhl and the hdlls.
+ARG HASHLINK_COMMIT=781960a5daca32ad6d5cea87b255fe8b5872551e
+RUN set -eux; \
+    mkdir -p /tmp/hashlink; \
+    cd /tmp/hashlink; \
+    git init -q; \
+    git remote add origin https://github.com/HaxeFoundation/hashlink.git; \
+    git fetch -q --depth 1 origin "${HASHLINK_COMMIT}"; \
+    git checkout -q FETCH_HEAD; \
+    make -j"$(nproc)"; \
+    make install; \
+    ldconfig; \
+    cd /; \
+    rm -rf /tmp/hashlink; \
+    test -f /usr/local/lib/libhl.so; \
+    test -f /usr/local/lib/sdl.hdll; \
+    test -f /usr/local/lib/openal.hdll; \
+    test -f /usr/local/include/hlc_main.c; \
+    if [ "$(dpkg --print-architecture)" = amd64 ]; then hl --version; fi
+
 RUN userdel -r node && useradd -m -s /bin/bash -u 1000 claude
 
 # Trust all /workspace paths so mounted repos work regardless of UID mismatch
@@ -84,13 +139,15 @@ RUN npm install -g "@openai/codex@${CODEX_VERSION}" \
 # OUTSIDE /home/claude, for the same reason Claude Code does: the persistent
 # claude-home volume is mounted over /home/claude at runtime and would otherwise
 # mask or freeze anything installed under the home directory. The global haxelib
-# repository lives at /opt/haxelib for the same reason, which keeps it read-only
-# and reproducible; to add libraries for a specific project, run `haxelib newrepo`
-# in that project to create a local, writable .haxelib.
+# repository lives at /opt/haxelib for the same reason.
+#
+# /opt/haxelib is owned by the claude user so `haxelib install` works at
+# runtime (session-scoped: containers run with --rm). Installed: the HaxeFlixel
+# stack and the Heaps stack (heaps, hlsdl, hlopenal, hashlink).
 #
 # Pin the versions so builds are reproducible; bump them to re-fetch, since the
-# layer is otherwise cached. The Flixel stack (lime/openfl/flixel/...) is pulled
-# at its latest release at build time.
+# layer is otherwise cached. The haxelibs are pulled at their latest release at
+# build time.
 #
 # Notes on the RUN below: libneko is registered with the dynamic linker via
 # /etc/ld.so.conf.d so `neko` (and thus `haxelib run`) resolves it without a
@@ -129,7 +186,15 @@ RUN set -eux; \
     haxelib install flixel-ui --always --quiet; \
     haxelib install flixel-tools --always --quiet; \
     haxelib install hxcpp --always --quiet; \
-    chmod -R a+rX /opt/neko /opt/haxe /opt/haxelib
+    haxelib install heaps --always --quiet; \
+    haxelib install hlsdl --always --quiet; \
+    haxelib install hlopenal --always --quiet; \
+    haxelib install hashlink --always --quiet; \
+    chmod -R a+rX /opt/neko /opt/haxe /opt/haxelib; \
+    chown -R claude:claude /opt/haxelib; \
+    haxelib list; \
+    haxelib path heaps > /dev/null; \
+    haxelib path hlsdl > /dev/null
 
 # Install the Go toolchain. It is a single self-contained tree, so it lands in
 # /opt — image-owned and OUTSIDE /home/claude — for the same reason everything
@@ -489,6 +554,16 @@ RUN set -eux; \
     chromium --version; \
     chromium --headless --dump-dom about:blank > /dev/null; \
     playwright screenshot about:blank /tmp/pw-smoke.png && rm -f /tmp/pw-smoke.png
+
+# Playwright's Firefox, next to its Chromium.
+RUN set -eux; \
+    playwright install --with-deps firefox; \
+    rm -rf /var/lib/apt/lists/*; \
+    chmod -R a+rX /opt/ms-playwright; \
+    ff="$(node -e 'process.stdout.write(require("playwright").firefox.executablePath())')"; \
+    test -x "$ff"; \
+    playwright screenshot --browser firefox about:blank /tmp/pw-ff-smoke.png \
+      && rm -f /tmp/pw-ff-smoke.png
 
 # Put the conventional user-level bin directories on PATH. Tools installed at
 # runtime into the persistent home volume — the documented way to add something

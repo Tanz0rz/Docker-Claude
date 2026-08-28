@@ -43,7 +43,7 @@ Docker or Podman must be installed before running the installer — see your OS 
 
 ## How it works
 
-- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, common dev tools (git, curl, jq, python3, pip, build-essential), the [Go](https://go.dev) toolchain with its usual companions (golangci-lint, staticcheck, goimports, Delve, gotestsum), [Ruff](https://docs.astral.sh/ruff/), and [pytest](https://docs.pytest.org) (see [Go, Ruff & pytest](#go-ruff--pytest)), the [Rust](https://www.rust-lang.org) toolchain (rustc, cargo, rustfmt, clippy — see [Rust](#rust)), the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) game framework (see [Haxe & HaxeFlixel](#haxe--haxeflixel)), and [Playwright](https://playwright.dev) with a Chromium it can drive (see [Playwright & Chromium](#playwright--chromium))
+- **Containerfile** — Debian-based image with Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, common dev tools (git, curl, jq, python3, pip, build-essential), the [Go](https://go.dev) toolchain with its usual companions (golangci-lint, staticcheck, goimports, Delve, gotestsum), [Ruff](https://docs.astral.sh/ruff/), and [pytest](https://docs.pytest.org) (see [Go, Ruff & pytest](#go-ruff--pytest)), the [Rust](https://www.rust-lang.org) toolchain (rustc, cargo, rustfmt, clippy — see [Rust](#rust)), the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) and [Heaps](https://heaps.io) game frameworks (see [Haxe, HaxeFlixel & Heaps](#haxe-haxeflixel--heaps)), [HashLink](https://hashlink.haxe.org) built from source plus the native build and audio dependencies for HashLink/Heaps/Kha work and audio-capture validation (see [HashLink, Kha & audio](#hashlink-kha--audio)), and [Playwright](https://playwright.dev) with Chromium and Firefox it can drive (see [Playwright, Chromium & Firefox](#playwright-chromium--firefox))
 - **run.sh / run.bat** — Builds the image, creates a persistent volume, and runs the container with your project mounted at `/workspace`. Each OS directory has its own run script. The `AGENT` env var (set by the `ccodex` launcher) selects which agent runs; it defaults to `claude`.
 - **Named volume** (`claude-home`) — Persists `/home/claude` across runs, including both agents' auth tokens, settings, memory, and history, plus the caches the toolchains write there (Go's module and build cache, npm's cache). Because it outlives any single image, the entrypoint repairs its ownership on every start — see [Home volume permissions](#home-volume-permissions)
 - **Project mount** — Your current directory is bind-mounted to `/workspace/<project>` so the agent can read and edit your code
@@ -171,34 +171,48 @@ docker run --rm -u 0 --entrypoint chown -v claude-home:/home/claude \
   claude-code -R 1000:1000 /home/claude
 ```
 
-## Haxe & HaxeFlixel
+## Haxe, HaxeFlixel & Heaps
 
-The image ships the [Haxe](https://haxe.org) toolchain and the [HaxeFlixel](https://haxeflixel.com) game framework so agents can build and run 2D games out of the box:
+The image ships the [Haxe](https://haxe.org) toolchain with the [HaxeFlixel](https://haxeflixel.com) and [Heaps](https://heaps.io) game frameworks so agents can build and run games out of the box:
 
 - **Haxe 4.3.7** and **Neko 2.4.1** — installed under `/opt/haxe` and `/opt/neko` and on `PATH` (`haxe`, `haxelib`, `neko`)
 - **HaxeFlixel stack** — `lime`, `openfl`, `flixel`, `flixel-addons`, `flixel-ui`, `flixel-tools`, and `hxcpp` for native C++ builds, plus a `lime` command
-- **Native runtime** — SDL2, OpenGL (Mesa), vorbis/ogg, and mbedtls are already in the image, and `xvfb` is included so a game can run headless (`xvfb-run lime test linux`)
+- **Heaps stack** — `heaps`, `hlsdl`, `hlopenal`, `hashlink` (see [HashLink, Kha & audio](#hashlink-kha--audio))
+- **Native runtime** — SDL2, OpenGL (Mesa), OpenAL, vorbis/ogg, and mbedtls are already in the image, and `xvfb` is included so a game can run headless (`xvfb-run lime test linux`, `xvfb-run hl bin/game.hl`)
 
-The Haxe and Neko versions are pinned via the `HAXE_VERSION` / `NEKO_VERSION` build args (bump them and rebuild to upgrade). The haxelib repository lives at `/opt/haxelib` and is read-only so the image stays reproducible — to add or update libraries for a specific project, run `haxelib newrepo` in that project first to create a local, writable `.haxelib`.
+The Haxe and Neko versions are pinned via the `HAXE_VERSION` / `NEKO_VERSION` build args (bump them and rebuild to upgrade). The haxelib repository at `/opt/haxelib` is owned by the `claude` user, so `haxelib install` works at runtime; containers run with `--rm`, so such installs last for the session only.
 
 ```bash
-lime create flixel:FlxTemplate MyGame   # scaffold a new game
+lime create flixel:FlxTemplate MyGame   # scaffold a new Flixel game
 cd MyGame
 lime test neko                          # build & run (or 'linux' for native, under xvfb-run)
+
+haxe -lib heaps -lib hlsdl -hl bin/game.hl -main Main   # Heaps → HashLink bytecode
+xvfb-run hl bin/game.hl                                 # run it on the hl VM
 ```
 
-## Playwright & Chromium
+## HashLink, Kha & audio
 
-The image ships [Playwright](https://playwright.dev) together with a Chromium it can drive, so agents can screenshot pages, run browser tests, scrape JavaScript-rendered sites and record videos without installing anything first:
+- **HashLink** — built from source at the commit pinned by `HASHLINK_COMMIT` (`781960a5`), installed into `/usr/local` (`hl`, `libhl.so`, the `*.hdll` libraries, HL/C headers). `hl` is x86-64 only; arm64 gets `libhl` and the hdlls
+- **Build tools** — `cmake`, `pkg-config`, `clang`
+- **Headers** — HashLink's CI set (libpng, libturbojpeg, SDL2, Mesa GL, OpenAL, mbedtls, libuv, vorbis, sqlite, zlib) and Kinc's (X11, Xinerama, Xrandr, Xcursor, Xi, xkbcommon, ALSA, udev, Wayland, Vulkan). Kha itself is not baked in — projects bring it as a submodule
+- **Audio** — `pulseaudio`, `pulseaudio-utils`, `libasound2-plugins`, `ffmpeg`/`ffprobe`
+- **xdotool**
+
+## Playwright, Chromium & Firefox
+
+The image ships [Playwright](https://playwright.dev) together with a Chromium and a Firefox it can drive, so agents can screenshot pages, run browser tests across both engines, scrape JavaScript-rendered sites and record videos without installing anything first:
 
 - **Playwright 1.62.1** (`@playwright/test`, which brings `playwright` and `playwright-core` at the same version) — installed at `/opt/playwright` with the CLI on `PATH` as `playwright` (`playwright test`, `playwright screenshot`, `playwright pdf`, `playwright codegen`, …). `NODE_PATH` points at its `node_modules`, so a one-off `node screenshot.js` that does `require('playwright')` works from any directory; a project with its own Playwright in `node_modules` still wins, because `NODE_PATH` is only consulted after the normal lookup
 - **Chromium** — the browser builds Playwright pins for that version (full Chromium, the `chromium-headless-shell` it uses for headless runs by default, and ffmpeg for video) live in `/opt/ms-playwright`, where `PLAYWRIGHT_BROWSERS_PATH` points. A `chromium` command wraps the full build, so the browser is also usable on its own — `chromium --headless --screenshot=out.png https://example.com` — and by anything that just wants a Chrome binary to point at
-- **Runtime libraries and fonts** — the apt packages Playwright lists for its Chromium on this Debian (libnss3, libatk, libcups2, libgbm1, libxkbcommon0, …) plus the fonts that make screenshots look right (Liberation, Noto Color Emoji, unifont, CJK and Thai fallbacks). `xvfb` is in the image too, so headed mode works under `xvfb-run` (`xvfb-run playwright codegen https://example.com`)
+- **Firefox** — the build Playwright pins for the same version, in `/opt/ms-playwright` (`playwright screenshot --browser firefox …`, `firefox.launch()`)
+- **Runtime libraries and fonts** — the apt packages Playwright lists for its Chromium and Firefox on this Debian (libnss3, libatk, libcups2, libgbm1, libxkbcommon0, …) plus the fonts that make screenshots look right (Liberation, Noto Color Emoji, unifont, CJK and Thai fallbacks). `xvfb` is in the image too, so headed mode works under `xvfb-run` (`xvfb-run playwright codegen https://example.com`)
 
 Headless is the default and needs no display. Two flags Playwright passes to Chromium by default are worth knowing because the `chromium` wrapper passes them too: `--no-sandbox`, since Chromium's own sandbox needs unprivileged user namespaces the container's default seccomp profile denies (the container *is* the sandbox here — see [Security model](#security-model)), and `--disable-dev-shm-usage`, since Docker's default 64 MB `/dev/shm` is small enough to crash the renderer on heavier pages.
 
 ```bash
 playwright screenshot --full-page https://example.com shot.png   # quick screenshot
+playwright screenshot --browser firefox https://example.com ff.png # same, in Firefox
 playwright test                                                  # run a project's Playwright suite
 node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromium.launch();const p=await b.newPage();await p.goto("https://example.com");console.log(await p.title());await b.close()})()'
 ```
@@ -206,7 +220,7 @@ node -e 'const {chromium}=require("playwright");(async()=>{const b=await chromiu
 The version is pinned via the `PLAYWRIGHT_VERSION` build arg (bump it and rebuild to upgrade; the browser revision follows it automatically). One caveat that follows from the pin: the browsers in `/opt/ms-playwright` belong to *this* Playwright version. A project pinned to a different one — npm or the Python package — will look for its own browser revision there, not find it, and fail to `playwright install` into `/opt` because that directory is read-only for the `claude` user. For such a project, either use the image's version, or install its browsers onto the persistent volume and run it with the same override:
 
 ```bash
-PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright npx playwright install chromium
+PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright npx playwright install chromium firefox
 PLAYWRIGHT_BROWSERS_PATH=~/.cache/ms-playwright npx playwright test
 ```
 
@@ -216,7 +230,7 @@ Python Playwright is not preinstalled, but `pip install playwright==1.62.1` in a
 
 > The `cclaude` and `ccodex` commands are the launchers installed by the [one-line installer](#quick-start) (or set up manually per the OS guide). Both wrap this repo's `run.sh` / `run.bat`, with `ccodex` setting `AGENT=codex`.
 
-The container comes with common dev tools (git, curl, jq, python3 + pip, build-essential, Go + linters, Rust, Ruff, pytest, Haxe, Playwright + Chromium). When Claude needs something else, there are two approaches:
+The container comes with common dev tools (git, curl, jq, python3 + pip, build-essential, cmake, clang, Go + linters, Rust, Ruff, pytest, Haxe + HashLink, ffmpeg + PulseAudio, Playwright + Chromium + Firefox). When Claude needs something else, there are two approaches:
 
 ### 1. Add to the Containerfile (permanent)
 
