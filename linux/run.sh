@@ -252,12 +252,10 @@ HOST_MOUNTS+=(-v "$HOME/.codex:/home/claude/.codex")
 # into every fresh container is exactly the slow, network-bound step this
 # exists to skip: keep one copy on the host and bind it in.
 #
-# Three files are read, in this order, each optional:
-#   $CONFIG_DIR/container-mounts                  every launch, any project
-#   $CONFIG_DIR/container-mounts.d/<project>      this project, kept out of its repo
-#   ./.container-mounts                           this project, inside its repo
-# where CONFIG_DIR is ${XDG_CONFIG_HOME:-~/.config}/docker-claude and <project>
-# is the directory name — the same name /workspace/<project> is derived from.
+# Two files are read, in this order, each optional:
+#   $CONFIG_DIR/container-mounts     every launch, any project — keeps repos clean
+#   ./.container-mounts              this project, inside its repo
+# where CONFIG_DIR is ${XDG_CONFIG_HOME:-~/.config}/docker-claude.
 #
 # One mount per line, whitespace-separated:  host_path [container_path] [ro]
 #   ~/src/Kha        /opt/Kha   ro     # tilde, absolute, or project-relative
@@ -270,7 +268,7 @@ HOST_MOUNTS+=(-v "$HOME/.codex:/home/claude/.codex")
 # The repo-local file lives inside whatever repo you just cloned, so every
 # mount from any source is printed in the banner, targets that would shadow the
 # home volume or the workspace are refused, and --no-mounts (or EXTRA_MOUNTS=0)
-# skips all three files for sessions on untrusted code.
+# skips both files for sessions on untrusted code.
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/docker-claude"
 EXTRA_MOUNT_LINES=()
 add_mounts_from() {
@@ -320,7 +318,6 @@ add_mounts_from() {
 }
 if [ "$EXTRA_MOUNTS" = true ]; then
   add_mounts_from "$CONFIG_DIR/container-mounts"
-  add_mounts_from "$CONFIG_DIR/container-mounts.d/$PROJECT_NAME"
   add_mounts_from ".container-mounts"
 fi
 
@@ -389,7 +386,7 @@ echo "  Home volume: $VOLUME_NAME (persistent)"
 if [ "$EXTRA_MOUNTS" != true ]; then
   echo "  Mounts:      off (container-mounts files ignored)"
 elif [ ${#EXTRA_MOUNT_LINES[@]} -eq 0 ]; then
-  echo "  Mounts:      none (.container-mounts or $CONFIG_DIR/container-mounts[.d/$PROJECT_NAME])"
+  echo "  Mounts:      none (.container-mounts or $CONFIG_DIR/container-mounts)"
 else
   echo "  Mounts:      ${EXTRA_MOUNT_LINES[0]}"
   for m in "${EXTRA_MOUNT_LINES[@]:1}"; do echo "               $m"; done

@@ -201,12 +201,9 @@ REM dataset, a shared asset tree) don't belong in the image, and re-cloning them
 REM into every fresh container is exactly the slow, network-bound step this
 REM exists to skip: keep one copy on the host and bind it in.
 REM
-REM Three files are read, in this order, each optional:
-REM   %APPDATA%\docker-claude\container-mounts                 every launch
-REM   %APPDATA%\docker-claude\container-mounts.d\<project>    this project, kept out of its repo
-REM   .\.container-mounts                                     this project, inside its repo
-REM where <project> is the directory name - the same name /workspace/<project>
-REM is derived from.
+REM Two files are read, in this order, each optional:
+REM   %APPDATA%\docker-claude\container-mounts   every launch, any project - keeps repos clean
+REM   .\.container-mounts                       this project, inside its repo
 REM
 REM One mount per line, whitespace-separated:  host_path [container_path] [ro]
 REM   ~/src/Kha        /opt/Kha   ro     (tilde, absolute, or project-relative)
@@ -219,12 +216,11 @@ REM
 REM The repo-local file lives inside whatever repo you just cloned, so every
 REM mount from any source is printed in the banner, targets that would shadow
 REM the home volume or the workspace are refused, and --no-mounts (or
-REM EXTRA_MOUNTS=0) skips all three files for sessions on untrusted code.
+REM EXTRA_MOUNTS=0) skips both files for sessions on untrusted code.
 set CONFIG_DIR=%APPDATA%\docker-claude
 set EXTRA_MOUNT_COUNT=0
 if defined EXTRA_MOUNTS_ON (
     call :add_mounts_from "%CONFIG_DIR%\container-mounts"
-    call :add_mounts_from "%CONFIG_DIR%\container-mounts.d\%PROJECT_NAME%"
     call :add_mounts_from ".container-mounts"
 )
 
@@ -282,7 +278,7 @@ echo   Home volume: %VOLUME_NAME% (persistent)
 if not defined EXTRA_MOUNTS_ON (
     echo   Mounts:      off ^(container-mounts files ignored^)
 ) else if "!EXTRA_MOUNT_COUNT!"=="0" (
-    echo   Mounts:      none ^(.container-mounts or %CONFIG_DIR%\container-mounts[.d\%PROJECT_NAME%]^)
+    echo   Mounts:      none ^(.container-mounts or %CONFIG_DIR%\container-mounts^)
 ) else (
     for /l %%N in (1,1,!EXTRA_MOUNT_COUNT!) do (
         if %%N==1 ( echo   Mounts:      !EXTRA_MOUNT_%%N! ) else ( echo                !EXTRA_MOUNT_%%N! )

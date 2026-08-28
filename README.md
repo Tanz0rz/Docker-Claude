@@ -82,7 +82,7 @@ ccodex -- --help                # reach Codex's own help (see the first line of 
 |---|---|---|
 | `AGENT` | `claude` | Which agent to run: `claude` or `codex`. The `ccodex` launcher just sets `AGENT=codex`. |
 | `GIT_ACCESS` | `1` | Whether the host's git identity and credentials (gitconfig, SSH keys, gh token/config) are shared. Set `0`/`false`/`no`/`off` to withhold them — and scrub any left in the volume by a prior run. A `--git`/`--no-git` option overrides this. |
-| `EXTRA_MOUNTS` | `1` | Whether the container-mounts files (global, per-project, repo-local) are honored. Set `0`/`false`/`no`/`off` to launch with none of their mounts. `--no-mounts` is the same thing. |
+| `EXTRA_MOUNTS` | `1` | Whether the container-mounts files (global and repo-local) are honored. Set `0`/`false`/`no`/`off` to launch with none of their mounts. `--no-mounts` is the same thing. |
 
 ## What's isolated
 
@@ -280,12 +280,11 @@ This matters because the agent is `exec`'d directly rather than through a login 
 
 Some dependencies are too big for either of the above: a multi-gigabyte engine checkout, a dataset, an asset tree shared between projects. Baking one into the image makes every rebuild download it again; cloning it into the volume or the workspace repeats that per machine and bloats the project. Instead, keep one copy on the host and bind it into the container per project.
 
-Mounts are declared in up to three files, read in this order (each optional, all in the same format):
+Mounts are declared in up to two files, read in this order (each optional, same format):
 
 | File | Applies to |
 |---|---|
-| `~/.config/docker-claude/container-mounts` | Every launch, any project |
-| `~/.config/docker-claude/container-mounts.d/<project>` | Launches from a directory named `<project>` — the same name `/workspace/<project>` is derived from. Per-project mounts without touching the repo or its `.gitignore` |
+| `~/.config/docker-claude/container-mounts` | Every launch, any project. The place for your own big dependencies — nothing in any repo or `.gitignore` changes |
 | `<project>/.container-mounts` | That project, committed alongside it |
 
 (`XDG_CONFIG_HOME` is honored on Linux/macOS; on Windows the directory is `%APPDATA%\docker-claude`.)
@@ -300,11 +299,11 @@ One mount per line, whitespace-separated:
 
 - The host path may be absolute, `~/…`, or relative to the project directory (whichever file it comes from). On Windows, `~` expands to `%USERPROFILE%` and forward slashes work.
 - The container path defaults to `/mnt/<basename>` when omitted. It must be absolute; the launcher refuses anything under `/home/claude` or the workspace, since that would shadow the volume or the project.
-- `ro` mounts read-only; the default is read-write.
+- `ro` mounts read-only; the default is read-write. Bind mounts are free at runtime, so a long global list costs nothing — but every session sees all of them, so prefer `ro` for anything a project only needs to read.
 - Blank lines and `#` comments are ignored. Paths with spaces are not supported.
 - A host path that doesn't exist is skipped with a warning rather than aborting the launch, so a committed file still works on a machine that lacks one of the paths. Prefer `~/…` and relative paths over absolute ones for the same reason.
 
-The banner lists every mount that was applied, from all three files. Since the repo-local file lives inside whatever repo you just cloned, check it before the first launch on unfamiliar code, or launch with `--no-mounts` (or `EXTRA_MOUNTS=0`) to ignore all of them. See [Security model](#security-model).
+The banner lists every mount that was applied, from both files. Since the repo-local file lives inside whatever repo you just cloned, check it before the first launch on unfamiliar code, or launch with `--no-mounts` (or `EXTRA_MOUNTS=0`) to ignore all of them. See [Security model](#security-model).
 
 For the Kha example above, the project's build then references the mount directly (`node /opt/Kha/make html5`), and a fresh container starts with the engine already present.
 
