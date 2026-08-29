@@ -15,8 +15,8 @@ chown "$CLAUDE_UID:$CLAUDE_GID" "$CLAUDE_HOME"
 # image, so it accumulates files owned by whoever wrote them: root (from the
 # runtime creating mount points) or a stranger UID (from an image whose user was
 # not 1000). Every such directory is unwritable for the claude user, and the
-# failures land far from the cause — `go build` dying with
-# "mkdir /home/claude/.cache/go-build: permission denied", npm refusing to touch
+# failures land far from the cause — a compiler dying with
+# "mkdir /home/claude/.cache/...: permission denied", npm refusing to touch
 # ~/.npm — so repair the whole tree on every start rather than one directory at
 # a time.
 #
@@ -30,28 +30,6 @@ find "$CLAUDE_HOME" -mindepth 1 \
      -o -path "$CLAUDE_HOME/.config/gh" \) -prune -o \
   \( ! -user "$CLAUDE_UID" -o ! -group "$CLAUDE_GID" \) \
   -exec chown -h "$CLAUDE_UID:$CLAUDE_GID" {} + 2>/dev/null || true
-
-# Cache, GOPATH and CARGO_HOME directories the image's ENV points at. Creating
-# them here means a volume that predates those settings still gets them, and
-# the tools never have to create them as a side effect of the first build.
-gosu "$CLAUDE_USER" mkdir -p \
-  "$CLAUDE_HOME/.cache/go-build" \
-  "$CLAUDE_HOME/go/bin" \
-  "$CLAUDE_HOME/go/pkg/mod" \
-  "$CLAUDE_HOME/.cargo/bin" 2>/dev/null || true
-
-# haxelib keeps its repository path in ~/.haxelib, which lives on the persistent
-# volume and so can outlive the directory it names — a session that ran
-# `haxelib newrepo` under /tmp leaves a pointer to a path that no longer exists,
-# and every later session sees an empty library repo instead of the image's
-# Flixel stack. HAXELIB_PATH (set in the image) currently takes priority, so
-# this is belt and braces: drop the file only when it points somewhere gone.
-if [ -f "$CLAUDE_HOME/.haxelib" ]; then
-  haxelib_repo="$(head -n1 "$CLAUDE_HOME/.haxelib" | tr -d '\r')"
-  if [ -n "$haxelib_repo" ] && [ ! -d "$haxelib_repo" ]; then
-    rm -f "$CLAUDE_HOME/.haxelib"
-  fi
-fi
 
 # Git identity and credentials. GIT_ACCESS (set by the run script) gates whether
 # the host's SSH keys and gitconfig reach the container. When it's off we also
@@ -117,6 +95,30 @@ if [ "$GIT_ACCESS" = true ]; then
   chown "$CLAUDE_UID:$CLAUDE_GID" "$CLAUDE_HOME/.ssh/known_hosts" 2>/dev/null || true
 fi
 
+# Apply the user's container-env files. The run scripts pass their contents in
+# CONTAINER_ENV as KEY=VALUE;KEY2=VALUE2 (so a value cannot contain ';'), already
+# filtered to plain identifiers.
+# PATH is the one variable treated specially: its value is PREPENDED to the
+# image's PATH rather than replacing it, so a mounted toolchain wins over
+# anything the volume holds while the agents and base tools stay reachable. The
+# variables are exported here, in the root shell, and inherited by the gosu exec
+# at the bottom — no login shell is involved, so ~/.profile would not do.
+_env_lines=""
+if [ -n "${CONTAINER_ENV:-}" ]; then
+  IFS=';' read -ra _entries <<<"$CONTAINER_ENV"
+  for _line in "${_entries[@]}"; do
+    [ -n "$_line" ] || continue
+    _key="${_line%%=*}"
+    _val="${_line#*=}"
+    case "$_key" in
+      PATH) export PATH="$_val:$PATH" ;;
+      *)    export "$_key=$_val" ;;
+    esac
+    _env_lines="${_env_lines}- \`${_line}\`"$'\n'
+  done
+fi
+unset CONTAINER_ENV
+
 # Tell the agent which extra host directories the launcher bind-mounted, so it
 # looks there before downloading a dependency the host already has. Claude Code
 # reads CLAUDE.md from every ancestor of its cwd, and /workspace is the parent
@@ -140,7 +142,17 @@ fi
     echo "dependency (engine checkout, dataset, asset tree) would be better shared from"
     echo "the host than downloaded here, tell the user: they can list it in"
     echo "~/.config/docker-claude/container-mounts (or the project's .container-mounts)"
-    echo "and it will appear at the path they choose on the next launch."
+    echo "and it will appear at the path they choose on the next launch. The same goes"
+    echo "for toolchains (Go, Rust, Haxe, ...): nothing beyond git, python3, node and"
+    echo "build-essential is in the image. A host install can be mounted in, with its"
+    echo "PATH and environment set through ~/.config/docker-claude/container-env."
+  fi
+  if [ -n "$_env_lines" ]; then
+    echo
+    echo "The launcher also set these environment variables for the session (from the"
+    echo "user's container-env files; PATH entries are prepended to the image's PATH):"
+    echo
+    printf '%s' "$_env_lines"
   fi
   echo
   echo "\$CONTAINER_MOUNTS holds the same list as \`/path:mode;...\`."

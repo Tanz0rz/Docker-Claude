@@ -45,14 +45,14 @@ $LAUNCHER runs $AGENT_LABEL in an isolated container (see README for details).
 Launcher options — must come before the agent's arguments:
   --no-git     Don't share git identity/credentials for this launch
   --git        Force git access on (overrides the GIT_ACCESS env var)
-  --no-mounts  Ignore all container-mounts files for this launch
+  --no-mounts  Ignore all container-mounts and container-env files for this launch
   --update     Pull the latest launcher source and agent release, then rebuild
   -h, --help   Show this help
   --           Stop parsing launcher options; pass the rest to $AGENT_LABEL
 
 Anything the launcher doesn't recognize is forwarded to $AGENT_LABEL.
 Env equivalents:  GIT_ACCESS=0|1 (git access)   AGENT=claude|codex (which agent)
-                  EXTRA_MOUNTS=0|1 (.container-mounts)
+                  EXTRA_MOUNTS=0|1 (container-mounts / container-env files)
 EOF
   exit 0
 fi
@@ -70,8 +70,8 @@ else
   esac
 fi
 
-# EXTRA_MOUNTS controls whether the container-mounts files are honored (see the
-# mounts block below). Default on; --no-mounts or EXTRA_MOUNTS=0 off.
+# EXTRA_MOUNTS controls whether the container-mounts and container-env files
+# are honored (see the mounts block below). Default on; --no-mounts or EXTRA_MOUNTS=0 off.
 if [ "$NO_MOUNTS" = true ]; then
   EXTRA_MOUNTS=false
 else
@@ -323,6 +323,54 @@ if [ "$EXTRA_MOUNTS" = true ]; then
   add_mounts_from ".container-mounts"
 fi
 
+# Environment for the mounted toolchains. A bind-mounted /opt/go is inert until
+# something puts /opt/go/bin on PATH; the same files-and-precedence scheme as
+# the mounts covers that:
+#   $CONFIG_DIR/container-env        every launch, any project
+#   ./.container-env                 this project, inside its repo
+#
+# One KEY=VALUE per line, container-side values (no host paths, no quoting, no
+# expansion, no ';' — what you write is what the container sees). Blank lines and #
+# comments are ignored. PATH is special: its value is PREPENDED to the image's
+# PATH by the entrypoint, so `PATH=/opt/go/bin:/opt/haxe` adds those in front
+# without knowing what the image already has. Names reserved by the launcher
+# (HOME, CONTAINER_*, GIT_ACCESS, the agents' own auth variables) are refused.
+# The whole set is printed in the banner and disabled by --no-mounts, for the
+# same reason the mounts are: the repo-local file arrives with the repo.
+EXTRA_ENV_LINES=()
+CONTAINER_ENV=""
+add_env_from() {
+  local file="$1" line key
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    case "$line" in ''|'#'*) continue ;; esac
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [ -n "$line" ] || continue
+    key="${line%%=*}"
+    case "$line" in
+      *=*) ;;
+      *) echo "Warning: $file: '$line' is not KEY=VALUE — skipped." >&2; continue ;;
+    esac
+    case "$key" in
+      *[!A-Za-z0-9_]*|[0-9]*|'')
+        echo "Warning: $file: '$key' is not a valid variable name — skipped." >&2; continue ;;
+      HOME|USER|LOGNAME|SHELL|GIT_ACCESS|CONTAINER_*|ANTHROPIC_API_KEY|OPENAI_API_KEY|GH_TOKEN|CLAUDE_CODE_USE_*)
+        echo "Warning: $file: refusing to set '$key' (reserved by the launcher) — skipped." >&2; continue ;;
+    esac
+    case "$line" in *';'*)
+      echo "Warning: $file: '$key' contains ';' (the separator) — skipped." >&2; continue ;;
+    esac
+    EXTRA_ENV_LINES+=("$line")
+    CONTAINER_ENV="${CONTAINER_ENV:+$CONTAINER_ENV;}$line"
+  done < "$file"
+}
+if [ "$EXTRA_MOUNTS" = true ]; then
+  add_env_from "$CONFIG_DIR/container-env"
+  add_env_from ".container-env"
+fi
+
 # Pass auth environment variables into the container
 ENV_FLAGS=(-e "CONTAINER_AGENT=$AGENT" -e "GIT_ACCESS=$GIT_ACCESS")
 # Tell the agent what was mounted: the entrypoint turns this into a
@@ -330,6 +378,9 @@ ENV_FLAGS=(-e "CONTAINER_AGENT=$AGENT" -e "GIT_ACCESS=$GIT_ACCESS")
 # downloading a dependency the host already has. Container path only — the
 # host side is irrelevant inside. Format: /path:ro;/other:rw
 ENV_FLAGS+=(-e "CONTAINER_MOUNTS=$EXTRA_MOUNT_SPECS")
+# ...and the container-env lines as KEY=V;KEY2=V, applied by the entrypoint
+# (PATH prepended).
+ENV_FLAGS+=(-e "CONTAINER_ENV=$CONTAINER_ENV")
 [ -n "${ANTHROPIC_API_KEY:-}" ] && ENV_FLAGS+=(-e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
 [ -n "${OPENAI_API_KEY:-}" ] && ENV_FLAGS+=(-e "OPENAI_API_KEY=$OPENAI_API_KEY")
 [ -n "${CLAUDE_CODE_USE_BEDROCK:-}" ] && ENV_FLAGS+=(-e "CLAUDE_CODE_USE_BEDROCK=$CLAUDE_CODE_USE_BEDROCK")
@@ -392,11 +443,20 @@ echo "  Workspace:   $(pwd) -> $WORKSPACE_PATH"
 echo "  Home volume: $VOLUME_NAME (persistent)"
 if [ "$EXTRA_MOUNTS" != true ]; then
   echo "  Mounts:      off (container-mounts files ignored)"
+  echo "  Env:         off (container-env files ignored)"
 elif [ ${#EXTRA_MOUNT_LINES[@]} -eq 0 ]; then
   echo "  Mounts:      none (.container-mounts or $CONFIG_DIR/container-mounts)"
 else
   echo "  Mounts:      ${EXTRA_MOUNT_LINES[0]}"
   for m in "${EXTRA_MOUNT_LINES[@]:1}"; do echo "               $m"; done
+fi
+if [ "$EXTRA_MOUNTS" = true ]; then
+  if [ ${#EXTRA_ENV_LINES[@]} -eq 0 ]; then
+    echo "  Env:         none (.container-env or $CONFIG_DIR/container-env)"
+  else
+    echo "  Env:         ${EXTRA_ENV_LINES[0]}"
+    for e in "${EXTRA_ENV_LINES[@]:1}"; do echo "               $e"; done
+  fi
 fi
 echo "  Update:      $LAUNCHER --update   pulls the latest source + release, rebuilds"
 echo "──────────────────────────────────────────────────────────────"

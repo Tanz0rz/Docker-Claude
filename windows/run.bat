@@ -56,7 +56,7 @@ if defined SHOW_HELP (
     echo Launcher options - must come before the agent's arguments:
     echo   --no-git     Don't share git identity/credentials for this launch
     echo   --git        Force git access on ^(overrides the GIT_ACCESS env var^)
-    echo   --no-mounts  Ignore all container-mounts files for this launch
+    echo   --no-mounts  Ignore all container-mounts and container-env files for this launch
     echo   --update     Pull the latest launcher source and agent release, then rebuild
     echo   -h, --help   Show this help
     echo   --           Stop parsing launcher options; pass the rest to %AGENT_LABEL%
@@ -79,8 +79,8 @@ if defined GIT_FLAG (
     if /i "%GIT_ACCESS%"=="no" set GIT_ACCESS_ON=
     if /i "%GIT_ACCESS%"=="off" set GIT_ACCESS_ON=
 )
-REM EXTRA_MOUNTS controls whether the container-mounts files are honored (see
-REM the mounts block below). Default on; --no-mounts or EXTRA_MOUNTS=0 off.
+REM EXTRA_MOUNTS controls whether the container-mounts and container-env files
+REM are honored (see the mounts block below). Default on; --no-mounts or EXTRA_MOUNTS=0 off.
 if not defined EXTRA_MOUNTS set EXTRA_MOUNTS=1
 set EXTRA_MOUNTS_ON=1
 if defined NO_MOUNTS set EXTRA_MOUNTS_ON=
@@ -225,12 +225,33 @@ if defined EXTRA_MOUNTS_ON (
     call :add_mounts_from ".container-mounts"
 )
 
+REM Environment for the mounted toolchains. A bind-mounted /opt/go is inert
+REM until something puts /opt/go/bin on PATH; the same files-and-precedence
+REM scheme as the mounts covers that:
+REM   %APPDATA%\docker-claude\container-env   every launch, any project
+REM   .\.container-env                       this project, inside its repo
+REM
+REM One KEY=VALUE per line, container-side values (Linux paths, no quoting, no
+REM ';' and no '!' or '%' - batch limits).
+REM Blank lines and # comment lines are ignored. PATH is special: its value is
+REM PREPENDED to the image's PATH by the entrypoint. Names reserved by the
+REM launcher (HOME, CONTAINER_*, GIT_ACCESS, the auth variables) are refused.
+REM Printed in the banner and disabled by --no-mounts, same as the mounts.
+set EXTRA_ENV_COUNT=0
+set CONTAINER_ENV=
+if defined EXTRA_MOUNTS_ON (
+    call :add_env_from "%CONFIG_DIR%\container-env"
+    call :add_env_from ".container-env"
+)
+
 REM Pass the selected agent, git-access flag, and any auth env vars into the container
 set ENV_FLAGS=-e CONTAINER_AGENT=%AGENT% -e GIT_ACCESS=%GIT_ACCESS_VALUE%
 REM Tell the agent what was mounted: the entrypoint turns this into a
 REM /workspace/CLAUDE.md (and AGENTS.md) so it checks these paths before
 REM downloading a dependency the host already has. Format: /path:ro;/other:rw
 set ENV_FLAGS=!ENV_FLAGS! -e "CONTAINER_MOUNTS=!EXTRA_MOUNT_SPECS!"
+REM ...and the container-env lines as KEY=V;KEY2=V, applied by the entrypoint.
+set ENV_FLAGS=!ENV_FLAGS! -e "CONTAINER_ENV=!CONTAINER_ENV!"
 if defined ANTHROPIC_API_KEY set ENV_FLAGS=!ENV_FLAGS! -e ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%
 if defined OPENAI_API_KEY set ENV_FLAGS=!ENV_FLAGS! -e OPENAI_API_KEY=%OPENAI_API_KEY%
 
@@ -282,11 +303,21 @@ echo   Workspace:   %cd% -^> %WORKSPACE_PATH%
 echo   Home volume: %VOLUME_NAME% (persistent)
 if not defined EXTRA_MOUNTS_ON (
     echo   Mounts:      off ^(container-mounts files ignored^)
+    echo   Env:         off ^(container-env files ignored^)
 ) else if "!EXTRA_MOUNT_COUNT!"=="0" (
     echo   Mounts:      none ^(.container-mounts or %CONFIG_DIR%\container-mounts^)
 ) else (
     for /l %%N in (1,1,!EXTRA_MOUNT_COUNT!) do (
         if %%N==1 ( echo   Mounts:      !EXTRA_MOUNT_%%N! ) else ( echo                !EXTRA_MOUNT_%%N! )
+    )
+)
+if defined EXTRA_MOUNTS_ON (
+    if "!EXTRA_ENV_COUNT!"=="0" (
+        echo   Env:         none ^(.container-env or %CONFIG_DIR%\container-env^)
+    ) else (
+        for /l %%N in (1,1,!EXTRA_ENV_COUNT!) do (
+            if %%N==1 ( echo   Env:         !EXTRA_ENV_%%N! ) else ( echo                !EXTRA_ENV_%%N! )
+        )
     )
 )
 echo   Update:      %LAUNCHER% --update   pulls the latest source + release, rebuilds
@@ -416,4 +447,42 @@ if defined M_SUFFIX (
 ) else (
     set "EXTRA_MOUNT_!EXTRA_MOUNT_COUNT!=!M_HOST! -> !M_CONT!"
 )
+exit /b 0
+
+REM Read one container-env file. Lines are KEY=VALUE; the value keeps any
+REM further '=' characters.
+:add_env_from
+set ENV_FILE=%~1
+if not exist "%ENV_FILE%" exit /b 0
+for /f "usebackq eol=# tokens=1* delims==" %%A in ("%ENV_FILE%") do call :add_env "%%~A" "%%~B"
+exit /b 0
+
+REM Validate and record one env entry. Args: key value.
+:add_env
+set "E_KEY=%~1"
+set "E_VAL=%~2"
+if not defined E_KEY exit /b 0
+REM Trim surrounding whitespace off the key.
+for /f "tokens=* delims= " %%K in ("!E_KEY!") do set "E_KEY=%%K"
+set "E_BAD="
+echo !E_KEY!| findstr /r /x "[A-Za-z_][A-Za-z0-9_]*" >nul || set E_BAD=name
+if not defined E_BAD (
+    for %%R in (HOME USER LOGNAME SHELL GIT_ACCESS ANTHROPIC_API_KEY OPENAI_API_KEY GH_TOKEN) do (
+        if /i "!E_KEY!"=="%%R" set E_BAD=reserved
+    )
+    if /i "!E_KEY:~0,10!"=="CONTAINER_" set E_BAD=reserved
+    if /i "!E_KEY:~0,16!"=="CLAUDE_CODE_USE_" set E_BAD=reserved
+)
+if "!E_BAD!"=="name" (
+    echo Warning: %ENV_FILE%: '!E_KEY!' is not a valid variable name - skipped. >&2
+    exit /b 0
+)
+if "!E_BAD!"=="reserved" (
+    echo Warning: %ENV_FILE%: refusing to set '!E_KEY!' ^(reserved by the launcher^) - skipped. >&2
+    exit /b 0
+)
+set /a EXTRA_ENV_COUNT+=1
+set "EXTRA_ENV_!EXTRA_ENV_COUNT!=!E_KEY!=!E_VAL!"
+REM ';'-joined for the container, like CONTAINER_MOUNTS; the entrypoint splits on it.
+if defined CONTAINER_ENV (set "CONTAINER_ENV=!CONTAINER_ENV!;!E_KEY!=!E_VAL!") else (set "CONTAINER_ENV=!E_KEY!=!E_VAL!")
 exit /b 0
