@@ -102,6 +102,7 @@ ccodex -- --help                # reach Codex's own help (see the first line of 
 - **Extra host directories** — Whatever the container-mounts files list, bind-mounted at the paths it names (see [Bind a host directory in](#3-bind-a-host-directory-in-per-project-no-rebuild)); each one is printed in the launch banner
 - **Extra environment** — Whatever the container-env files list (`PATH` additions, `GOROOT`, …) so mounted toolchains are usable (see [Bring your toolchain from the host](#4-bring-your-toolchain-from-the-host-no-rebuild)); each variable is printed in the launch banner
 - **Clipboard (Linux/Wayland only)** — The Wayland compositor socket is mounted so image paste (ctrl+v) works in the TUI
+- **Terminal identity (Linux/macOS)** — `TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, and `COLORTERM` are forwarded when set, so the TUI recognizes the terminal it is really talking to and enables its extended key encodings (kitty keyboard protocol, xterm modifyOtherKeys). Without them the container sees a generic `TERM=xterm` and keys that need a distinct code — ctrl+backspace word-delete, for one — arrive as ambiguous legacy codes and do nothing
 
 ## Home volume permissions
 
