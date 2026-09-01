@@ -381,6 +381,13 @@ ENV_FLAGS+=(-e "CONTAINER_MOUNTS=$EXTRA_MOUNT_SPECS")
 # ...and the container-env lines as KEY=V;KEY2=V, applied by the entrypoint
 # (PATH prepended).
 ENV_FLAGS+=(-e "CONTAINER_ENV=$CONTAINER_ENV")
+# Forward the host terminal's identity. Without it the TUI cannot tell it is
+# talking to a terminal that supports extended key encodings (kitty keyboard
+# protocol, modifyOtherKeys), so keys like ctrl+backspace arrive as ambiguous
+# legacy codes and lose their bindings.
+for _tv in TERM TERM_PROGRAM TERM_PROGRAM_VERSION COLORTERM; do
+  [ -n "${!_tv:-}" ] && ENV_FLAGS+=(-e "$_tv=${!_tv}")
+done
 [ -n "${ANTHROPIC_API_KEY:-}" ] && ENV_FLAGS+=(-e "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY")
 [ -n "${OPENAI_API_KEY:-}" ] && ENV_FLAGS+=(-e "OPENAI_API_KEY=$OPENAI_API_KEY")
 [ -n "${CLAUDE_CODE_USE_BEDROCK:-}" ] && ENV_FLAGS+=(-e "CLAUDE_CODE_USE_BEDROCK=$CLAUDE_CODE_USE_BEDROCK")
