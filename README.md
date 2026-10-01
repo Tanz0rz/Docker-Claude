@@ -1,8 +1,8 @@
-# Containerized Claude Code & Codex
+# Containerized Claude Code, Codex & opencode
 
-Run [Claude Code](https://claude.ai) and the [OpenAI Codex CLI](https://github.com/openai/codex) in a container with their sandbox/approval gates disabled, safely isolated from your host system.
+Run [Claude Code](https://claude.ai), the [OpenAI Codex CLI](https://github.com/openai/codex) and [opencode](https://opencode.ai) in a container with their sandbox/approval gates disabled, safely isolated from your host system.
 
-The image bundles **both** agents. Launch Claude Code with `cclaude` and Codex with `ccodex` — same container, same isolation, same persistent home.
+The image bundles **all three** agents. Launch Claude Code with `cclaude`, Codex with `ccodex` and opencode with `copencode` — same container, same isolation, same persistent home. `copencode` picks up your host opencode config, including a model served locally (llama.cpp, Ollama) — see [opencode and local models](#opencode-and-local-models).
 
 ## Why
 
@@ -22,14 +22,15 @@ curl -fsSL https://raw.githubusercontent.com/Tanz0rz/Docker-Claude/main/install.
 irm https://raw.githubusercontent.com/Tanz0rz/Docker-Claude/main/install.ps1 | iex
 ```
 
-This fetches the repo to a fixed location and installs the `cclaude` (Claude Code) and `ccodex` (Codex CLI) launchers. It does **not** modify your shell config — it prints the one line to add to your PATH so you can decide. (Pass `--modify-path`, or set `DOCKER_CLAUDE_MODIFY_PATH=1`, to have it edit your rc for you.) Once on PATH, from any project directory:
+This fetches the repo to a fixed location and installs the `cclaude` (Claude Code), `ccodex` (Codex CLI) and `copencode` (opencode) launchers. It does **not** modify your shell config — it prints the one line to add to your PATH so you can decide. (Pass `--modify-path`, or set `DOCKER_CLAUDE_MODIFY_PATH=1`, to have it edit your rc for you.) Once on PATH, from any project directory:
 
 ```bash
 cclaude        # launch Claude Code
 ccodex         # launch the Codex CLI
+copencode      # launch opencode
 ```
 
-The first launch builds the image and prompts you to `/login`. After that, `cclaude --update` / `ccodex --update` keeps everything current — it pulls the latest launcher source *and* the latest agent release, then rebuilds. Re-running the installer is only needed if the launcher shims themselves change.
+The first launch builds the image and prompts you to `/login`. After that, `cclaude --update` / `ccodex --update` / `copencode --update` keeps everything current — it pulls the latest launcher source *and* the latest agent release, then rebuilds. Re-running the installer is only needed if the launcher shims themselves change.
 
 ### Prerequisites per OS
 
@@ -43,15 +44,15 @@ Docker or Podman must be installed before running the installer — see your OS 
 
 ## How it works
 
-- **Containerfile** — a deliberately small Debian-based image: Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, gh CLI, and the base dev tools (git, curl, jq, python3 + venv + pip, build-essential). No language toolchains, engines or browsers are baked in — you bring those from the host, per machine or per project, without rebuilding (see [Bring your toolchain from the host](#4-bring-your-toolchain-from-the-host-no-rebuild))
-- **run.sh / run.bat** — Builds the image, creates a persistent volume, and runs the container with your project mounted at `/workspace`. Each OS directory has its own run script. The `AGENT` env var (set by the `ccodex` launcher) selects which agent runs; it defaults to `claude`.
-- **Named volume** (`claude-home`) — Persists `/home/claude` across runs, including both agents' auth tokens, settings, memory, and history, plus whatever caches the tools you use write there (npm's cache, a Go module cache, a cargo registry). Because it outlives any single image, the entrypoint repairs its ownership on every start — see [Home volume permissions](#home-volume-permissions)
+- **Containerfile** — a deliberately small Debian-based image: Node.js 22, the Claude Code CLI, the OpenAI Codex CLI, opencode, gh CLI, and the base dev tools (git, curl, jq, python3 + venv + pip, build-essential), plus the *shared libraries* that host-mounted toolchains link against (the browser/font set Playwright asks for on Debian 12, and the SDL/GL/OpenAL/mbedTLS/Vorbis stack a HashLink or Heaps build needs, with `xvfb`, `xdotool` and PulseAudio for headed and audio runs). No language toolchains, engines or browsers themselves are baked in — you bring those from the host, per machine or per project, without rebuilding (see [Bring your toolchain from the host](#4-bring-your-toolchain-from-the-host-no-rebuild) and [The shared host toolchain tree](#5-the-shared-host-toolchain-tree))
+- **run.sh / run.bat** — Builds the image, creates a persistent volume, and runs the container with your project mounted at `/workspace`. Each OS directory has its own run script. The `AGENT` env var (set by the `ccodex` and `copencode` launchers) selects which agent runs; it defaults to `claude`.
+- **Named volume** (`claude-home`) — Persists `/home/claude` across runs, including the agents' auth tokens, settings, memory, and history, plus whatever caches the tools you use write there (npm's cache, a Go module cache, a cargo registry). Because it outlives any single image, the entrypoint repairs its ownership on every start — see [Home volume permissions](#home-volume-permissions)
 - **Project mount** — Your current directory is bind-mounted to `/workspace/<project>` so the agent can read and edit your code
 
 ### Launch options
 
 A launch is controlled by a few launcher options and two environment variables.
-Run `cclaude --help` (or `ccodex --help`) to see them; the run script also prints
+Run `cclaude --help` (or `ccodex --help` / `copencode --help`) to see them; the run script also prints
 the resolved config as a banner on startup.
 
 **Launcher options** — these must come **before** the agent's arguments. They're
@@ -80,7 +81,7 @@ ccodex -- --help                # reach Codex's own help (see the first line of 
 
 | Variable | Default | Effect |
 |---|---|---|
-| `AGENT` | `claude` | Which agent to run: `claude` or `codex`. The `ccodex` launcher just sets `AGENT=codex`. |
+| `AGENT` | `claude` | Which agent to run: `claude`, `codex` or `opencode`. The `ccodex` and `copencode` launchers just set `AGENT=codex` / `AGENT=opencode`. |
 | `GIT_ACCESS` | `1` | Whether the host's git identity and credentials (gitconfig, SSH keys, gh token/config) are shared. Set `0`/`false`/`no`/`off` to withhold them — and scrub any left in the volume by a prior run. A `--git`/`--no-git` option overrides this. |
 | `EXTRA_MOUNTS` | `1` | Whether the container-mounts and container-env files (global and repo-local) are honored. Set `0`/`false`/`no`/`off` to launch with none of their mounts or variables. `--no-mounts` is the same thing. |
 
@@ -90,7 +91,7 @@ ccodex -- --help                # reach Codex's own help (see the first line of 
 |---|---|---|
 | Filesystem | Protected | Only `/workspace` (your project) is mounted, plus any directories your container-mounts files opt in |
 | Processes | Protected | No access to host processes |
-| Network | Protected | Outbound web access only (bridge mode) |
+| Network | Protected | Outbound access only (bridge mode) — which includes host services listening beyond loopback, if the host firewall admits the bridge |
 | Privilege escalation | Protected | Runs as the unprivileged `claude` user; capabilities dropped bar the five the entrypoint's root stage needs, plus no-new-privileges |
 
 ## What's shared
@@ -98,11 +99,39 @@ ccodex -- --help                # reach Codex's own help (see the first line of 
 - **Git config** — Copied from host at startup so commits use your identity (unless `GIT_ACCESS=0`)
 - **SSH keys** — Copied from host at startup for private repo access (unless `GIT_ACCESS=0`)
 - **Auth** — The host's `~/.claude` and `~/.codex` are shared so logins and token refreshes persist in both directions (host and container). `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are forwarded when set. (Agent auth is always shared — it is not affected by `GIT_ACCESS`.)
+- **opencode config (`copencode` only)** — The host's `~/.config/opencode` is copied in at startup, with loopback URLs pointed at the host (see [opencode and local models](#opencode-and-local-models))
 - **Project directory** — Read-write mount of your current directory
 - **Extra host directories** — Whatever the container-mounts files list, bind-mounted at the paths it names (see [Bind a host directory in](#3-bind-a-host-directory-in-per-project-no-rebuild)); each one is printed in the launch banner
 - **Extra environment** — Whatever the container-env files list (`PATH` additions, `GOROOT`, …) so mounted toolchains are usable (see [Bring your toolchain from the host](#4-bring-your-toolchain-from-the-host-no-rebuild)); each variable is printed in the launch banner
 - **Clipboard (Linux/Wayland only)** — The Wayland compositor socket is mounted so image paste (ctrl+v) works in the TUI
 - **Terminal identity (Linux/macOS)** — `TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, and `COLORTERM` are forwarded when set, so the TUI recognizes the terminal it is really talking to and enables its extended key encodings (kitty keyboard protocol, xterm modifyOtherKeys). Without them the container sees a generic `TERM=xterm` and keys that need a distinct code — ctrl+backspace word-delete, for one — arrive as ambiguous legacy codes and do nothing
+
+## opencode and local models
+
+`copencode` runs [opencode](https://opencode.ai) with the same isolation, git/SSH sharing, mounts and environment as the other two launchers. What differs is where its configuration comes from, because the usual reason to run it is a model served from your own machine.
+
+- **Config is copied, not shared.** The host's `~/.config/opencode` (`opencode.json`, key files referenced as `{file:~/.config/opencode/…}`, agents, commands) is staged read-only and copied into the home volume on every `copencode` launch. The host stays the source of truth; edits made inside the container are discarded at the next launch and never reach the config your host's unsandboxed opencode runs with. It is not mounted at all for `cclaude` / `ccodex`.
+- **Loopback URLs are pointed at the host.** A provider with `"baseURL": "http://127.0.0.1:8081/v1"` means "the llama.cpp server on this machine" — but inside the container, `127.0.0.1` is the container. Every `http(s)://127.0.0.1`, `localhost` or `[::1]` URL in the copied `opencode.json` / `opencode.jsonc` is rewritten to `host.docker.internal`, which the launcher maps to the host. Your host config needs no container-specific variant.
+- **Permission prompts are off**, as for the other agents: the entrypoint sets `OPENCODE_PERMISSION` to allow every tool, overriding an `"ask"` in the host config for the container only.
+- **Sessions and any `/connect` logins** live in the home volume (`~/.local/share/opencode`), separate from the host's.
+
+Two things on the host have to be true for a local model server to be reachable, and neither can be fixed from inside the container:
+
+1. **The server must listen beyond loopback** — `llama-server --host 0.0.0.0` (or the Docker bridge address), `OLLAMA_HOST=0.0.0.0` for Ollama. A server bound to `127.0.0.1` only is invisible to the container.
+2. **The host firewall must let the container in.** With ufw's default deny-incoming, traffic from the Docker bridge to a host port is dropped and opencode just hangs on its first request. Allow the port from the bridge only:
+
+   ```
+   sudo ufw allow in on docker0 to any port 8081 proto tcp
+   ```
+
+To check from the host that the container can see the server:
+
+```
+docker run --rm --add-host=host.docker.internal:host-gateway --entrypoint curl \
+  claude-code -s -m 5 -o /dev/null -w '%{http_code}\n' http://host.docker.internal:8081/health
+```
+
+`200` means opencode will connect; `000` after a five-second wait is the firewall (or the bind address).
 
 ## Home volume permissions
 
@@ -123,9 +152,9 @@ docker run --rm -u 0 --entrypoint chown -v claude-home:/home/claude \
 
 ## Managing dependencies
 
-> The `cclaude` and `ccodex` commands are the launchers installed by the [one-line installer](#quick-start) (or set up manually per the OS guide). Both wrap this repo's `run.sh` / `run.bat`, with `ccodex` setting `AGENT=codex`.
+> The `cclaude`, `ccodex` and `copencode` commands are the launchers installed by the [one-line installer](#quick-start) (or set up manually per the OS guide). All wrap this repo's `run.sh` / `run.bat`, with `ccodex` and `copencode` setting `AGENT=codex` / `AGENT=opencode`.
 
-The image ships only the base dev tools (git, curl, jq, python3 + venv + pip, build-essential) on top of Node.js and the two agents. Everything else — a language toolchain, a game engine, a browser — comes in one of four ways. For anything you already have installed on the host, the fourth is the one to reach for first:
+The image ships the base dev tools (git, curl, jq, python3 + venv + pip, build-essential) on top of Node.js and the three agents, plus the shared libraries that host-mounted toolchains link against. Everything else — a language toolchain, a game engine, a browser — comes in one of the ways below. For anything you already have on the host, reach for the fourth first; the fifth is the ready-made tree this repo ships a script for, and is what most of these options are in service of:
 
 ### 1. Add to the Containerfile (permanent)
 
@@ -261,14 +290,61 @@ What *doesn't* mount cleanly is a toolchain's system-level dependencies: the sha
 
 The agent is told about the environment the same way it's told about mounts: the generated `/workspace/CLAUDE.md` lists each variable, so it knows `go` is at `/opt/go/bin` before it tries to install one.
 
+### 5. The shared host toolchain tree
+
+Sections 3 and 4 describe the mechanism; this is the concrete tree this repo ships a script for. [`shared-tree.sh`](shared-tree.sh) builds `~/opt/docker-claude` — one directory holding every toolchain that used to be baked into the image — and the two global config files mount it at `/opt/dc` and put it on `PATH`.
+
+Run it once per machine:
+
+```
+./shared-tree.sh          # ~3 GB and a good few minutes; over half of it is browsers
+```
+
+**The constraint that shapes it.** The image is Debian 12 (glibc 2.36); your host almost certainly isn't — this was written on Arch with glibc 2.44. A binary bind-mounted from the host's `/usr/bin` therefore *cannot run in the container*: it is linked against a newer glibc and libraries Debian 12 doesn't ship. The failure is a bare `version 'GLIBC_2.38' not found`, or a missing `.so`, well away from anything that names the cause. So nothing in the tree is copied from the host's package manager. Every piece is one of:
+
+| Kind | Why it works in Debian 12 | Examples |
+|---|---|---|
+| Statically linked | no runtime linking at all | `ffmpeg`, `ffprobe` |
+| Official distro-neutral tarball | upstream builds against an old glibc | Go, Haxe, Neko, the Playwright/Puppeteer browsers |
+| Built *inside* a Debian 12 container | linked against the image's own libraries | HashLink, the Go dev tools |
+| Host rustup | rustup's toolchains are already distro-neutral | `rustc`, `cargo`, clippy, rustfmt |
+
+**What's in it.**
+
+| Path (host) | Mounted at | Holds |
+|---|---|---|
+| `~/opt/docker-claude/bin` | `/opt/dc/bin` | stable names: `ffmpeg`, `ffprobe`, `chromium`, `chrome`, `chromedriver`, `firefox` |
+| `~/opt/docker-claude/ffmpeg` | `/opt/dc/ffmpeg` | static ffmpeg 7.x |
+| `~/opt/docker-claude/browsers` | `/opt/dc/browsers` | Playwright's Chromium + Firefox, Puppeteer's Chrome + chromedriver |
+| `~/opt/docker-claude/node` | `/opt/dc/node` | `playwright`, `@playwright/test`, `puppeteer` |
+| `~/opt/docker-claude/python` | `/opt/dc/python` | `playwright`, `selenium`, `pytest`, `ruff` (cp311, matching the image's python3) |
+| `~/opt/docker-claude/go`, `gotools` | `/opt/dc/go`, `/opt/dc/gotools` | Go toolchain; golangci-lint, staticcheck, goimports, dlv, gotestsum |
+| `~/opt/docker-claude/haxe`, `neko`, `hashlink` | `/opt/dc/…` | Haxe, Neko, a HashLink build with its hdlls |
+| `~/opt/docker-claude/haxelib` | `/opt/dc/haxelib` | the HaxeFlixel and Heaps stacks — **read-write**, so `haxelib install` works |
+| `~/opt/docker-claude/innoextract` | `/opt/dc/innoextract` | `innoextract` (git master, static) for Inno Setup installers |
+| `~/opt/docker-claude/sevenzip` | `/opt/dc/sevenzip` | 7-Zip 26.03 — `7z`/`7zz` for zip, 7z, cab, msi, NSIS |
+| `~/.rustup`, `~/.cargo/bin` | `/opt/rustup`, `/opt/cargo-bin` | your host Rust, used directly |
+
+The tree is mounted as a **single read-only mount**, with `haxelib` layered back over it read-write. That is deliberate: `bin/` holds relative symlinks into version-bearing directories (`browsers/chromium-1234/…`), which only resolve if the whole tree arrives at one path. The runtime sorts bind mounts by target depth, so `/opt/dc` lands before `/opt/dc/haxelib`.
+
+**The image's half of the bargain.** A mounted Chromium or HashLink is still a dynamically linked ELF, so Debian has to supply the `.so` files it was linked against — that part cannot be mounted and lives in two `apt-get` layers in the Containerfile. The browser half of that list is not hand-maintained: it is Playwright's own `debian12-x64` table for chromium + firefox + tools, and the Containerfile carries the one-liner that regenerates it after a Playwright upgrade.
+
+**Extracting Windows installers.** `innoextract` is built from a pinned git master commit, not the 1.9 release: the release dates from 2020 and stops at Inno Setup 6.0.5, refusing 6.3.x outright. Master reaches **6.3.3**. Inno Setup **6.5+ changed its setup loader and no build of innoextract handles it yet** — those fail with `Unexpected setup loader revision: 2`, and there is currently no Linux-native tool for them. `7z` is not a fallback for that: on an Inno installer it only reports the PE wrapper. The 1.9 binary stays available as `innoextract-1.9` for comparing behaviour on a file that misbehaves.
+
+**Version pins** all live at the top of `shared-tree.sh`. Bump one and re-run; each section replaces only its own directory. After a Playwright upgrade, also regenerate the Containerfile's browser dependency list and rebuild, or the new browser build may want an `.so` the image lacks.
+
+**Adding to it.** Put the toolchain under `~/opt/docker-claude/<name>` (a tarball, or built in a `debian:12-slim` container if it links against anything), add a line to `~/.config/docker-claude/container-env` for its `bin` and variables, and — if it is dynamically linked — add its runtime libraries to the Containerfile's native apt layer. No `container-mounts` change is needed: the whole tree is already mounted.
+
+
 ## Updating
 
-Both CLIs are baked into the image, pinned via build args in the `Containerfile`
-(`CLAUDE_CODE_VERSION` and `CODEX_VERSION`). One command updates everything:
+All three CLIs are baked into the image, pinned via build args in the `Containerfile`
+(`CLAUDE_CODE_VERSION`, `CODEX_VERSION` and `OPENCODE_VERSION`). One command updates everything:
 
 ```
 cclaude --update   # rebuild with the latest Claude Code
 ccodex --update    # rebuild with the latest Codex CLI
+copencode --update # rebuild with the latest opencode
 ```
 
 `--update` does two things before rebuilding, and the first one is easy to miss:
@@ -282,13 +358,13 @@ ccodex --update    # rebuild with the latest Codex CLI
 2. **Fetches the latest release of that agent** and pins it into the build.
 
 Then it rebuilds and launches as usual. (The `--update` flag is consumed by the
-launcher; all other arguments are passed through to the agent. Because both
-agents live in one image, either `--update` rebuilds the whole thing.)
+launcher; all other arguments are passed through to the agent. Because all the
+agents live in one image, any `--update` rebuilds the whole thing.)
 
 Only the flagged agent's version is bumped, though: `cclaude --update` moves
-`CLAUDE_CODE_VERSION` to the latest release and leaves Codex at whatever the
-`Containerfile` pins, and `ccodex --update` does the reverse. Run both to move
-both.
+`CLAUDE_CODE_VERSION` to the latest release and leaves the others at whatever the
+`Containerfile` pins, and likewise for `ccodex --update` and
+`copencode --update`. Run each to move each.
 
 If the build fails, the launcher stops there rather than starting the image that
 is still tagged. A failed rebuild would otherwise hand you the *previous* image
@@ -333,6 +409,7 @@ The container significantly reduces the blast radius of running these agents wit
 - **Read your GitHub CLI tokens** — the `gh` config directory is mounted read-only for the same reason
 - **Reach whatever `.container-mounts` grants** — a repo can ship that file, and it can name any host directory, including a sensitive one. The launcher prints each mount in the banner and refuses targets that would shadow the home volume or workspace, but it does not judge the host side; read the file before launching on untrusted code, or use `--no-mounts`
 - **Set environment through `.container-env`** — the repo-local file can put a directory first on `PATH` or point a tool at a config of the repo's choosing. Values only reach the container (never the host), the launcher's own variables are refused, and every one is printed in the banner; the same `--no-mounts` skips it
+- **Read your opencode config and its keys (`copencode` only)** — the copy includes any key file the config references
 - **Make network requests** — outbound network access is required for the Claude API but also means the container can reach arbitrary endpoints
 - **Read and write your clipboard (Linux/Wayland)** — the Wayland socket is mounted for image paste, which also allows clipboard access and opening windows. Wayland's client isolation prevents input snooping; for this reason the X11 socket (which would allow keylogging) is never mounted. Remove the `WAYLAND_DISPLAY` block in `linux/run.sh` to opt out
 

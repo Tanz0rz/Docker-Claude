@@ -5,13 +5,15 @@ IMAGE_NAME="claude-code"
 VOLUME_NAME="claude-home"
 SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Which agent to launch: "claude" (default) or "codex". Set by the ccodex alias
-# (AGENT=codex). The image bundles both CLIs; AGENT only picks which one runs.
+# Which agent to launch: "claude" (default), "codex" or "opencode". Set by the
+# ccodex / copencode launchers (AGENT=codex, AGENT=opencode). The image bundles
+# all three CLIs; AGENT only picks which one runs.
 AGENT="${AGENT:-claude}"
 case "$AGENT" in
   claude) AGENT_LABEL="Claude Code"; LAUNCHER="cclaude" ;;
   codex)  AGENT_LABEL="Codex CLI";   LAUNCHER="ccodex"  ;;
-  *) echo "Error: unknown AGENT '$AGENT' (expected 'claude' or 'codex')" >&2; exit 1 ;;
+  opencode) AGENT_LABEL="opencode";  LAUNCHER="copencode" ;;
+  *) echo "Error: unknown AGENT '$AGENT' (expected 'claude', 'codex' or 'opencode')" >&2; exit 1 ;;
 esac
 
 # Launcher options are parsed front-anchored: only leading --update/--git/
@@ -51,7 +53,7 @@ Launcher options — must come before the agent's arguments:
   --           Stop parsing launcher options; pass the rest to $AGENT_LABEL
 
 Anything the launcher doesn't recognize is forwarded to $AGENT_LABEL.
-Env equivalents:  GIT_ACCESS=0|1 (git access)   AGENT=claude|codex (which agent)
+Env equivalents:  GIT_ACCESS=0|1 (git access)   AGENT=claude|codex|opencode (which agent)
                   EXTRA_MOUNTS=0|1 (container-mounts / container-env files)
 EOF
   exit 0
@@ -171,7 +173,16 @@ update_source() {
 # layer it belongs to, further up.
 if [ "$FORCE_UPDATE" = true ]; then
   update_source
-  if [ "$AGENT" = "codex" ]; then
+  if [ "$AGENT" = "opencode" ]; then
+    echo "Fetching latest opencode version..."
+    LATEST_VERSION="$(curl -fsSL https://registry.npmjs.org/opencode-ai/latest \
+      | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)" \
+      || { echo "Error: could not fetch the latest opencode version." >&2; exit 1; }
+    [ -n "$LATEST_VERSION" ] || { echo "Error: could not parse the latest opencode version." >&2; exit 1; }
+    echo "Rebuilding image with opencode $LATEST_VERSION..."
+    $RUNTIME build --pull --build-arg "OPENCODE_VERSION=$LATEST_VERSION" \
+      -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
+  elif [ "$AGENT" = "codex" ]; then
     echo "Fetching latest Codex CLI version..."
     LATEST_VERSION="$(curl -fsSL https://registry.npmjs.org/@openai/codex/latest \
       | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)" \
@@ -221,6 +232,10 @@ if [ "$RUNTIME" = "podman" ]; then
   RUNTIME_FLAGS+=(--userns=keep-id)
 else
   RUNTIME_FLAGS+=(--cap-drop=ALL --cap-add=CHOWN --cap-add=FOWNER --cap-add=SETUID --cap-add=SETGID --cap-add=DAC_OVERRIDE --security-opt=no-new-privileges)
+  # Give the host a name inside the container, for a model server running on it
+  # (see the opencode config below). Docker Desktop and Podman define
+  # host.docker.internal themselves; plain Docker on Linux needs it spelled out.
+  RUNTIME_FLAGS+=(--add-host=host.docker.internal:host-gateway)
 fi
 
 # Derive a unique workspace path from the host directory name
@@ -246,6 +261,17 @@ HOST_MOUNTS+=(-v "$HOME/.claude:/home/claude/.claude")
 # serves either regardless of which one you launched to log in.
 mkdir -p "$HOME/.codex"
 HOST_MOUNTS+=(-v "$HOME/.codex:/home/claude/.codex")
+
+# opencode keeps its configuration (providers, models, key files) in
+# ~/.config/opencode. Unlike the two directories above it is staged read-only
+# and only for an opencode launch: the entrypoint copies it into the home
+# volume and points any loopback URL in it (a llama.cpp or Ollama server on
+# 127.0.0.1) at the host instead, since 127.0.0.1 inside the container is the
+# container. Nothing the agent does in there reaches the host's copy.
+OPENCODE_CONFIG_HOST="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+if [ "$AGENT" = opencode ] && [ -d "$OPENCODE_CONFIG_HOST" ]; then
+  HOST_MOUNTS+=(-v "$OPENCODE_CONFIG_HOST:/tmp/.host-opencode:ro")
+fi
 
 # Extra bind mounts. Large one-off dependencies (a 1 GB engine checkout, a
 # dataset, a shared asset tree) don't belong in the image, and re-cloning them
@@ -427,7 +453,13 @@ fi
 
 # Summarize the active auth source for the banner. Env-var credentials take
 # precedence over the persisted subscription/OAuth login in the mounted home.
-if [ "$AGENT" = codex ]; then
+if [ "$AGENT" = opencode ]; then
+  if [ -d "$OPENCODE_CONFIG_HOST" ]; then
+    AUTH_STATUS="host opencode config ($OPENCODE_CONFIG_HOST, copied; loopback URLs -> host)"
+  else
+    AUTH_STATUS="none — no $OPENCODE_CONFIG_HOST on the host; run /connect inside"
+  fi
+elif [ "$AGENT" = codex ]; then
   [ -n "${OPENAI_API_KEY:-}" ] && AUTH_STATUS="OPENAI_API_KEY" || AUTH_STATUS="ChatGPT login (~/.codex)"
 elif [ -n "${CLAUDE_CODE_USE_BEDROCK:-}" ]; then
   AUTH_STATUS="AWS Bedrock"
@@ -443,7 +475,7 @@ echo "────────────────────────�
 echo "  ${_B}Git access:  $GIT_STATUS${_R}"
 echo "               (toggle with --git/--no-git)"
 echo "──────────────────────────────────────────────────────────────"
-echo "  Agent:       $AGENT_LABEL   (switch with AGENT=claude|codex)"
+echo "  Agent:       $AGENT_LABEL   (switch with AGENT=claude|codex|opencode)"
 echo "  Auth:        $AUTH_STATUS"
 echo "  Clipboard:   $CLIPBOARD_STATUS"
 echo "  Workspace:   $(pwd) -> $WORKSPACE_PATH"

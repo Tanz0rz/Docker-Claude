@@ -89,6 +89,40 @@ elif [ -f "$CLAUDE_HOME/.codex/auth.json" ]; then
   chown "$CLAUDE_UID:$CLAUDE_GID" "$CLAUDE_HOME/.codex/auth.json" 2>/dev/null || true
 fi
 
+# opencode's configuration. The run scripts stage the host's ~/.config/opencode
+# read-only at /tmp/.host-opencode (for an opencode launch only); it is copied
+# into the home volume rather than mounted in place, for two reasons.
+#
+# One: a provider that points at a model server on the host — llama.cpp or
+# Ollama on http://127.0.0.1:8081 — is unreachable as written, because loopback
+# in here is the container itself. Every loopback URL in the copy is rewritten
+# to host.docker.internal, which the launcher maps to the host. This is a plain
+# text substitution, not a JSON edit, so it survives opencode.jsonc comments and
+# also catches a local MCP server's URL.
+#
+# Two: the agent gets a copy it can scribble on without touching the config the
+# host's own, unsandboxed opencode runs with.
+#
+# The copy is refreshed on every launch, so the host stays the source of truth.
+# opencode's own install artifacts in that directory (the plugin SDK it
+# npm-installs next to the config) are left alone on both sides: the host's are
+# built for the host, and re-fetching the container's every start is wasted.
+OPENCODE_CFG="$CLAUDE_HOME/.config/opencode"
+if [ -d /tmp/.host-opencode ]; then
+  _oc_keep=(! -name node_modules ! -name package.json ! -name package-lock.json
+            ! -name bun.lock ! -name .gitignore)
+  mkdir -p "$OPENCODE_CFG"
+  find "$OPENCODE_CFG" -mindepth 1 -maxdepth 1 "${_oc_keep[@]}" -exec rm -rf {} +
+  find /tmp/.host-opencode -mindepth 1 -maxdepth 1 "${_oc_keep[@]}" \
+    -exec cp -a {} "$OPENCODE_CFG/" \; 2>/dev/null || true
+  for _f in "$OPENCODE_CFG"/opencode.json "$OPENCODE_CFG"/opencode.jsonc "$OPENCODE_CFG"/config.json; do
+    [ -f "$_f" ] || continue
+    sed -i -E 's#(https?://)(127\.0\.0\.1|localhost|\[::1\])([:/"])#\1host.docker.internal\3#g' "$_f"
+  done
+  chown "$CLAUDE_UID:$CLAUDE_GID" "$CLAUDE_HOME/.config"
+  chown -R "$CLAUDE_UID:$CLAUDE_GID" "$OPENCODE_CFG"
+fi
+
 # Ensure GitHub host key is trusted for SSH operations (only when git access is on)
 if [ "$GIT_ACCESS" = true ]; then
   gosu "$CLAUDE_USER" ssh-keyscan github.com >> "$CLAUDE_HOME/.ssh/known_hosts" 2>/dev/null || true
@@ -172,9 +206,23 @@ passwd -l root 2>/dev/null
 find / -path /proc -prune -o -path /sys -prune -o \( -perm -4000 -o -perm -2000 \) -type f ! -name gosu -exec chmod a-s {} + 2>/dev/null || true
 
 # Launch the requested agent. The run scripts set CONTAINER_AGENT to select
-# which CLI to exec; both run with their sandbox/approval gates disabled since
-# the container itself is the sandbox.
+# which CLI to exec; all of them run with their sandbox/approval gates disabled
+# since the container itself is the sandbox.
 case "${CONTAINER_AGENT:-claude}" in
+  opencode)
+    # opencode has no single switch for this that works everywhere: --auto only
+    # exists on the TUI and `run`, and turns `opencode --auto models` into a
+    # request to open a project called "models". OPENCODE_PERMISSION is merged
+    # over the config key by key, so a bare {"*":"allow"} would leave a host
+    # config's "bash": "ask" standing — each gated tool is named explicitly.
+    export OPENCODE_PERMISSION='{"*":"allow","bash":"allow","edit":"allow","read":"allow","glob":"allow","grep":"allow","list":"allow","task":"allow","skill":"allow","lsp":"allow","webfetch":"allow","websearch":"allow","codesearch":"allow","external_directory":"allow","doom_loop":"allow"}'
+    # opencode looks for AGENTS.md from the cwd up to the project root, which
+    # stops short of /workspace, so the mounts note written above is handed to
+    # it as an extra instructions file instead.
+    [ -n "${OPENCODE_CONFIG_CONTENT:-}" ] \
+      || export OPENCODE_CONFIG_CONTENT='{"instructions":["/workspace/AGENTS.md"]}'
+    exec gosu "$CLAUDE_USER" opencode "$@"
+    ;;
   codex)
     exec gosu "$CLAUDE_USER" codex --dangerously-bypass-approvals-and-sandbox "$@"
     ;;

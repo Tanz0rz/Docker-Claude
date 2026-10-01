@@ -2,8 +2,8 @@
 #
 #   irm https://raw.githubusercontent.com/Tanz0rz/Docker-Claude/main/install.ps1 | iex
 #
-# Fetches the repo to a fixed location and drops cclaude / ccodex launchers onto
-# your user PATH, so you can run either agent from any project directory without
+# Fetches the repo to a fixed location and drops cclaude / ccodex / copencode
+# launchers onto your user PATH, so you can run any of the agents from any project directory without
 # cloning by hand or editing PATH. Re-run any time to update.
 $ErrorActionPreference = 'Stop'
 
@@ -49,7 +49,9 @@ New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
     Set-Content -Encoding ASCII (Join-Path $BinDir 'cclaude.cmd')
 "@echo off`r`nsetlocal`r`nset AGENT=codex`r`n`"$RunBat`" %*`r`n" |
     Set-Content -Encoding ASCII (Join-Path $BinDir 'ccodex.cmd')
-Write-Host "  Installed launchers -> $BinDir\cclaude.cmd, $BinDir\ccodex.cmd"
+"@echo off`r`nsetlocal`r`nset AGENT=opencode`r`n`"$RunBat`" %*`r`n" |
+    Set-Content -Encoding ASCII (Join-Path $BinDir 'copencode.cmd')
+Write-Host "  Installed launchers -> $BinDir\cclaude.cmd, $BinDir\ccodex.cmd, $BinDir\copencode.cmd"
 
 # PATH handling. By default we never modify your PATH — we just explain how.
 # Opt in with DOCKER_CLAUDE_MODIFY_PATH=1 to have the installer set your user PATH.
@@ -67,7 +69,7 @@ if (-not $onPath -and $ModifyPath) {
 }
 
 Write-Host ""
-Write-Host "Done - cclaude launches Claude Code, ccodex launches the Codex CLI."
+Write-Host "Done - cclaude launches Claude Code, ccodex the Codex CLI, copencode opencode."
 Write-Host ""
 if ($onPath) {
     Write-Host "You're all set. From any project directory, run:"

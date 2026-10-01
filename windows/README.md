@@ -20,8 +20,8 @@ In PowerShell:
 irm https://raw.githubusercontent.com/Tanz0rz/Docker-Claude/main/install.ps1 | iex
 ```
 
-This clones the repo to `%LOCALAPPDATA%\docker-claude` and installs `cclaude.cmd`
-and `ccodex.cmd` launchers under `%LOCALAPPDATA%\docker-claude\bin`. It won't
+This clones the repo to `%LOCALAPPDATA%\docker-claude` and installs `cclaude.cmd`,
+`ccodex.cmd` and `copencode.cmd` launchers under `%LOCALAPPDATA%\docker-claude\bin`. It won't
 modify your PATH — it prints the exact command to add that directory to your
 user PATH so you can run it yourself. (Prefer it automated? Set
 `DOCKER_CLAUDE_MODIFY_PATH=1` before running the installer.) Re-run the command
@@ -36,10 +36,11 @@ From any project directory (CMD or PowerShell):
 ```cmd
 cclaude        REM launch Claude Code
 ccodex         REM launch the OpenAI Codex CLI
+copencode      REM launch opencode (see "opencode and local models" in the main README)
 ```
 
-Both use the same image and persistent volume; `ccodex` just sets `AGENT=codex`
-so the run script starts Codex instead.
+All use the same image and persistent volume; `ccodex` and `copencode` just set
+`AGENT=codex` / `AGENT=opencode` so the run script starts that agent instead.
 
 On first run, the script will:
 1. Build the container image (takes a few minutes)
@@ -58,7 +59,7 @@ ccodex --resume
 ### Manual setup (without the installer)
 
 Prefer to wire it up yourself? Clone the repo and add its `windows` directory to
-your user PATH — it already contains `cclaude.cmd` and `ccodex.cmd`:
+your user PATH — it already contains `cclaude.cmd`, `ccodex.cmd` and `copencode.cmd`:
 
 ```powershell
 git clone https://github.com/Tanz0rz/Docker-Claude.git
@@ -67,7 +68,7 @@ $dir = 'C:\path\to\Docker-Claude\windows'
 [Environment]::SetEnvironmentVariable('Path', "$cur;$dir", 'User')
 ```
 
-Restart your terminal, then run `cclaude` or `ccodex` from any project directory.
+Restart your terminal, then run `cclaude`, `ccodex` or `copencode` from any project directory.
 
 ## Container security flags
 

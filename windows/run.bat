@@ -5,8 +5,9 @@ set IMAGE_NAME=claude-code
 set VOLUME_NAME=claude-home
 set SCRIPT_DIR=%~dp0..
 
-REM Which agent to launch: "claude" (default) or "codex". Set by ccodex.cmd.
-REM The image bundles both CLIs; AGENT only picks which one runs.
+REM Which agent to launch: "claude" (default), "codex" or "opencode". Set by
+REM ccodex.cmd / copencode.cmd. The image bundles all three CLIs; AGENT only
+REM picks which one runs.
 if not defined AGENT set AGENT=claude
 if /i "%AGENT%"=="claude" (
     set AGENT_LABEL=Claude Code
@@ -14,8 +15,11 @@ if /i "%AGENT%"=="claude" (
 ) else if /i "%AGENT%"=="codex" (
     set AGENT_LABEL=Codex CLI
     set LAUNCHER=ccodex
+) else if /i "%AGENT%"=="opencode" (
+    set AGENT_LABEL=opencode
+    set LAUNCHER=copencode
 ) else (
-    echo Error: unknown AGENT '%AGENT%' ^(expected 'claude' or 'codex'^) >&2
+    echo Error: unknown AGENT '%AGENT%' ^(expected 'claude', 'codex' or 'opencode'^) >&2
     exit /b 1
 )
 
@@ -61,7 +65,7 @@ if defined SHOW_HELP (
     echo   -h, --help   Show this help
     echo   --           Stop parsing launcher options; pass the rest to %AGENT_LABEL%
     echo(
-    echo Env equivalents:  GIT_ACCESS=0^|1   AGENT=claude^|codex   EXTRA_MOUNTS=0^|1
+    echo Env equivalents:  GIT_ACCESS=0^|1   AGENT=claude^|codex^|opencode   EXTRA_MOUNTS=0^|1
     exit /b 0
 )
 
@@ -121,7 +125,22 @@ REM The changed build-arg busts the agent layer; any source change busts whichev
 REM layer it belongs to, further up. See :update_source at the end of this file.
 if defined FORCE_UPDATE (
     call :update_source
-    if /i "%AGENT%"=="codex" (
+    if /i "%AGENT%"=="opencode" (
+        echo Fetching latest opencode version...
+        set LATEST_VERSION=
+        for /f "delims=" %%V in ('powershell -NoProfile -Command "(Invoke-RestMethod https://registry.npmjs.org/opencode-ai/latest).version"') do set LATEST_VERSION=%%V
+        if not defined LATEST_VERSION (
+            echo Error: could not fetch the latest opencode version. >&2
+            exit /b 1
+        )
+        echo Rebuilding image with opencode !LATEST_VERSION!...
+        %RUNTIME% build --pull --build-arg OPENCODE_VERSION=!LATEST_VERSION! -t %IMAGE_NAME% -f "%SCRIPT_DIR%\Containerfile" "%SCRIPT_DIR%"
+        if errorlevel 1 (
+            echo Error: the image build failed. >&2
+            echo Refusing to launch - the old %IMAGE_NAME% image is still tagged and would run silently. >&2
+            exit /b 1
+        )
+    ) else if /i "%AGENT%"=="codex" (
         echo Fetching latest Codex CLI version...
         set LATEST_VERSION=
         for /f "delims=" %%V in ('powershell -NoProfile -Command "(Invoke-RestMethod https://registry.npmjs.org/@openai/codex/latest).version"') do set LATEST_VERSION=%%V
@@ -195,6 +214,17 @@ REM you launched to log in.
 if not exist "%USERPROFILE%\.codex" mkdir "%USERPROFILE%\.codex"
 if not exist "%USERPROFILE%\.codex\auth.json" echo {}> "%USERPROFILE%\.codex\auth.json"
 set HOST_MOUNTS=!HOST_MOUNTS! -v "%USERPROFILE%\.codex\auth.json:/tmp/.host-codex-auth.json"
+
+REM opencode keeps its configuration (providers, models, key files) in
+REM %USERPROFILE%\.config\opencode. It is staged read-only, and only for an
+REM opencode launch: the entrypoint copies it into the home volume and points any
+REM loopback URL in it (a llama.cpp or Ollama server on 127.0.0.1) at the host
+REM instead, since 127.0.0.1 inside the container is the container. Nothing the
+REM agent does in there reaches the host's copy.
+set OPENCODE_CONFIG_HOST=%USERPROFILE%\.config\opencode
+set OPENCODE_CONFIG_FOUND=
+if exist "%OPENCODE_CONFIG_HOST%\" set OPENCODE_CONFIG_FOUND=1
+if /i "%AGENT%"=="opencode" if defined OPENCODE_CONFIG_FOUND set HOST_MOUNTS=!HOST_MOUNTS! -v "%OPENCODE_CONFIG_HOST%:/tmp/.host-opencode:ro"
 
 REM Extra bind mounts. Large one-off dependencies (a 1 GB engine checkout, a
 REM dataset, a shared asset tree) don't belong in the image, and re-cloning them
@@ -282,12 +312,17 @@ REM already holds rather than gaining one, so the drop still works.
 if "%RUNTIME%"=="podman" (
     set RUNTIME_FLAGS=--userns=keep-id
 ) else (
-    set RUNTIME_FLAGS=--cap-drop=ALL --cap-add=CHOWN --cap-add=FOWNER --cap-add=SETUID --cap-add=SETGID --cap-add=DAC_OVERRIDE --security-opt=no-new-privileges
+    REM --add-host gives the host a name inside the container, for a model server
+    REM running on it (see the opencode config above). Docker Desktop defines
+    REM host.docker.internal itself; spelling it out is harmless there.
+    set RUNTIME_FLAGS=--cap-drop=ALL --cap-add=CHOWN --cap-add=FOWNER --cap-add=SETUID --cap-add=SETGID --cap-add=DAC_OVERRIDE --security-opt=no-new-privileges --add-host=host.docker.internal:host-gateway
 )
 
 REM Summarize the active auth source for the banner. An env-var key takes
 REM precedence over the persisted subscription/ChatGPT login in the mounted home.
-if /i "%AGENT%"=="codex" (
+if /i "%AGENT%"=="opencode" (
+    if defined OPENCODE_CONFIG_FOUND ( set AUTH_STATUS=host opencode config ^(copied; loopback URLs -^> host^) ) else ( set AUTH_STATUS=none - no %OPENCODE_CONFIG_HOST% on the host; run /connect inside )
+) else if /i "%AGENT%"=="codex" (
     if defined OPENAI_API_KEY ( set AUTH_STATUS=OPENAI_API_KEY ) else ( set AUTH_STATUS=ChatGPT login ^(~/.codex^) )
 ) else (
     if defined ANTHROPIC_API_KEY ( set AUTH_STATUS=ANTHROPIC_API_KEY ) else ( set AUTH_STATUS=subscription login ^(~/.claude^) )
@@ -297,7 +332,7 @@ echo --------------------------------------------------------------
 echo   GIT ACCESS:  %GIT_STATUS%
 echo                (toggle with --git/--no-git)
 echo --------------------------------------------------------------
-echo   Agent:       %AGENT_LABEL%   (switch with AGENT=claude^|codex)
+echo   Agent:       %AGENT_LABEL%   (switch with AGENT=claude^|codex^|opencode)
 echo   Auth:        %AUTH_STATUS%
 echo   Workspace:   %cd% -^> %WORKSPACE_PATH%
 echo   Home volume: %VOLUME_NAME% (persistent)

@@ -3,8 +3,8 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/Tanz0rz/Docker-Claude/main/install.sh | bash
 #
-# Fetches the repo to a fixed location and drops `cclaude` / `ccodex` launchers
-# onto your PATH, so you can run either agent from any project directory without
+# Fetches the repo to a fixed location and drops `cclaude` / `ccodex` /
+# `copencode` launchers onto your PATH, so you can run any of the agents from any project directory without
 # cloning by hand or editing shell aliases. Re-run any time to update.
 set -euo pipefail
 
@@ -76,7 +76,8 @@ make_shim() {
 }
 make_shim cclaude ""
 make_shim ccodex "codex"
-info "Installed launchers -> $BIN_DIR/cclaude, $BIN_DIR/ccodex"
+make_shim copencode "opencode"
+info "Installed launchers -> $BIN_DIR/cclaude, $BIN_DIR/ccodex, $BIN_DIR/copencode"
 
 # Figure out whether the launchers are already callable, and which rc file new
 # shells would source — used for the instructions below (and for the opt-in edit).
@@ -103,7 +104,7 @@ if [ "$ON_PATH" -eq 0 ] && [ "$MODIFY_PATH" -eq 1 ]; then
 fi
 
 echo
-echo "Done — cclaude launches Claude Code, ccodex launches the Codex CLI."
+echo "Done — cclaude launches Claude Code, ccodex the Codex CLI, copencode opencode."
 echo
 if [ "$ON_PATH" -eq 1 ]; then
   echo "You're all set. From any project directory, run:"

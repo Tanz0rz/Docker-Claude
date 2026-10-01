@@ -24,8 +24,8 @@ podman machine start
 curl -fsSL https://raw.githubusercontent.com/Tanz0rz/Docker-Claude/main/install.sh | bash
 ```
 
-This clones the repo to `~/.local/share/docker-claude` and installs `cclaude`
-and `ccodex` launchers in `~/.local/bin`. It won't touch your shell config — it
+This clones the repo to `~/.local/share/docker-claude` and installs `cclaude`,
+`ccodex` and `copencode` launchers in `~/.local/bin`. It won't touch your shell config — it
 prints the exact line to add `~/.local/bin` to your PATH so you can add it
 yourself. (Prefer it automated? Re-run with `--modify-path`, or set
 `DOCKER_CLAUDE_MODIFY_PATH=1`.) Re-run the command any time to reinstall the
@@ -40,10 +40,11 @@ From any project directory:
 ```bash
 cclaude        # launch Claude Code
 ccodex         # launch the OpenAI Codex CLI
+copencode      # launch opencode (see "opencode and local models" in the main README)
 ```
 
-Both use the same image and persistent volume; `ccodex` just sets `AGENT=codex`
-so the run script starts Codex instead.
+All use the same image and persistent volume; `ccodex` and `copencode` just set
+`AGENT=codex` / `AGENT=opencode` so the run script starts that agent instead.
 
 On first run, the script will:
 1. Build the container image (takes a few minutes)
@@ -71,6 +72,7 @@ chmod +x macos/run.sh
 # in ~/.zshrc or ~/.bashrc
 alias cclaude="$HOME/path/to/Docker-Claude/macos/run.sh"
 alias ccodex="AGENT=codex $HOME/path/to/Docker-Claude/macos/run.sh"
+alias copencode="AGENT=opencode $HOME/path/to/Docker-Claude/macos/run.sh"
 ```
 
 ## Docker vs Podman
