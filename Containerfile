@@ -206,6 +206,14 @@ RUN npm install -g "opencode-ai@${OPENCODE_VERSION}" \
 # self-upgrade into the persistent home volume.
 ENV OPENCODE_DISABLE_AUTOUPDATE=1
 
+# Record which agents this image ships. The run scripts only build when the image
+# is missing, so an image built before an agent was added would otherwise be
+# reused, and its entrypoint would quietly launch Claude Code instead. They check
+# for docker-claude.agent.<name> and rebuild when it is absent.
+LABEL docker-claude.agent.claude="1" \
+      docker-claude.agent.codex="1" \
+      docker-claude.agent.opencode="1"
+
 # Put the conventional user-level bin directories on PATH. Tools installed at
 # runtime into the persistent home volume — the documented way to add something
 # without a rebuild (rustup into ~/.cargo, pipx/pip --user into ~/.local) — drop

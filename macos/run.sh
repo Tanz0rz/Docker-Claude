@@ -214,9 +214,15 @@ if [ "$FORCE_UPDATE" = true ]; then
   fi
 fi
 
-# Build if image doesn't exist
+# Build if the image doesn't exist, or if it predates the requested agent: an
+# image built from older source has no binary for it, and its entrypoint falls
+# through to Claude Code without a word. The Containerfile labels every agent it
+# installs, so a missing label means the image is too old for this launch.
 if ! $RUNTIME image inspect "$IMAGE_NAME" &>/dev/null; then
   echo "Building image..."
+  $RUNTIME build -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
+elif [ "$($RUNTIME image inspect --format "{{ index .Config.Labels \"docker-claude.agent.$AGENT\" }}" "$IMAGE_NAME" 2>/dev/null)" != 1 ]; then
+  echo "The $IMAGE_NAME image was built without $AGENT_LABEL — rebuilding..."
   $RUNTIME build -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
 fi
 

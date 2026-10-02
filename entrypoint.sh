@@ -226,7 +226,11 @@ case "${CONTAINER_AGENT:-claude}" in
   codex)
     exec gosu "$CLAUDE_USER" codex --dangerously-bypass-approvals-and-sandbox "$@"
     ;;
-  *)
+  claude)
     exec gosu "$CLAUDE_USER" claude --dangerously-skip-permissions "$@"
+    ;;
+  *)
+    echo "Error: unknown CONTAINER_AGENT '$CONTAINER_AGENT' (expected claude, codex or opencode)" >&2
+    exit 1
     ;;
 esac

@@ -173,8 +173,19 @@ if defined FORCE_UPDATE (
     )
 )
 
-REM Build if image doesn't exist
-%RUNTIME% image inspect %IMAGE_NAME% >nul 2>nul || (
+REM Build if the image doesn't exist, or if it predates the requested agent: an
+REM image built from older source has no binary for it, and its entrypoint falls
+REM through to Claude Code without a word. The Containerfile labels every agent
+REM it installs, so a missing label means the image is too old for this launch.
+set NEED_BUILD=
+%RUNTIME% image inspect %IMAGE_NAME% >nul 2>nul || set NEED_BUILD=1
+if not defined NEED_BUILD (
+    %RUNTIME% image inspect --format "{{json .Config.Labels}}" %IMAGE_NAME% 2>nul | findstr /c:"docker-claude.agent.%AGENT%" >nul || (
+        echo The %IMAGE_NAME% image was built without %AGENT_LABEL% - rebuilding...
+        set NEED_BUILD=1
+    )
+)
+if defined NEED_BUILD (
     echo Building image...
     %RUNTIME% build -t %IMAGE_NAME% -f "%SCRIPT_DIR%\Containerfile" "%SCRIPT_DIR%"
     if errorlevel 1 (
