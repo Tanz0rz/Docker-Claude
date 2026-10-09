@@ -181,43 +181,50 @@ update_source() {
   fi
 }
 
-# --update: refresh the source, fetch the latest release of every agent, then
-# rebuild. All three agents share one image, so all three versions are passed:
-# a build-arg left out falls back to its Containerfile pin, and updating one
-# agent would roll the other two back. A failed fetch aborts for the same reason.
-# Changed build-args bust the agent layers; any source change busts whichever
-# layer it belongs to, further up.
+# Fetch the latest release of every agent, then rebuild. Used by --update and
+# by the missing-agent rebuild below. All three agents share one image, so all
+# three versions are passed: a build-arg left out falls back to its Containerfile
+# pin, and updating one agent would roll the other two back. A failed fetch
+# aborts for the same reason. Changed build-args bust the agent layers; any
+# source change busts whichever layer it belongs to, further up.
 npm_latest() {
   curl -fsSL "https://registry.npmjs.org/$1/latest" \
     | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4
 }
+build_with_latest_agents() {
+  local claude_latest codex_latest opencode_latest
+  echo "Fetching latest agent versions..."
+  claude_latest="$(curl -fsSL https://downloads.claude.ai/claude-code-releases/latest)" || claude_latest=""
+  codex_latest="$(npm_latest @openai/codex)" || codex_latest=""
+  opencode_latest="$(npm_latest opencode-ai)" || opencode_latest=""
+  [ -n "$claude_latest" ]   || { echo "Error: could not fetch the latest Claude Code version." >&2; exit 1; }
+  [ -n "$codex_latest" ]    || { echo "Error: could not fetch the latest Codex CLI version." >&2; exit 1; }
+  [ -n "$opencode_latest" ] || { echo "Error: could not fetch the latest opencode version." >&2; exit 1; }
+  echo "Rebuilding image with Claude Code $claude_latest, Codex CLI $codex_latest, opencode $opencode_latest..."
+  $RUNTIME build --pull \
+    --build-arg "CLAUDE_CODE_VERSION=$claude_latest" \
+    --build-arg "CODEX_VERSION=$codex_latest" \
+    --build-arg "OPENCODE_VERSION=$opencode_latest" \
+    -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
+}
 if [ "$FORCE_UPDATE" = true ]; then
   update_source
-  echo "Fetching latest agent versions..."
-  CLAUDE_LATEST="$(curl -fsSL https://downloads.claude.ai/claude-code-releases/latest)" || CLAUDE_LATEST=""
-  CODEX_LATEST="$(npm_latest @openai/codex)" || CODEX_LATEST=""
-  OPENCODE_LATEST="$(npm_latest opencode-ai)" || OPENCODE_LATEST=""
-  [ -n "$CLAUDE_LATEST" ]   || { echo "Error: could not fetch the latest Claude Code version." >&2; exit 1; }
-  [ -n "$CODEX_LATEST" ]    || { echo "Error: could not fetch the latest Codex CLI version." >&2; exit 1; }
-  [ -n "$OPENCODE_LATEST" ] || { echo "Error: could not fetch the latest opencode version." >&2; exit 1; }
-  echo "Rebuilding image with Claude Code $CLAUDE_LATEST, Codex CLI $CODEX_LATEST, opencode $OPENCODE_LATEST..."
-  $RUNTIME build --pull \
-    --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_LATEST" \
-    --build-arg "CODEX_VERSION=$CODEX_LATEST" \
-    --build-arg "OPENCODE_VERSION=$OPENCODE_LATEST" \
-    -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
+  build_with_latest_agents
 fi
 
 # Build if the image doesn't exist, or if it predates the requested agent: an
 # image built from older source has no binary for it, and its entrypoint falls
 # through to Claude Code without a word. The Containerfile labels every agent it
-# installs, so a missing label means the image is too old for this launch.
+# installs, so a missing label means the image is too old for this launch. That
+# rebuild fetches the latest release of every agent rather than building the
+# Containerfile pins — the pins usually trail what the image already runs, and
+# a plain rebuild would roll the existing agents back.
 if ! $RUNTIME image inspect "$IMAGE_NAME" &>/dev/null; then
   echo "Building image..."
   $RUNTIME build -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
 elif [ "$($RUNTIME image inspect --format "{{ index .Config.Labels \"docker-claude.agent.$AGENT\" }}" "$IMAGE_NAME" 2>/dev/null)" != 1 ]; then
   echo "The $IMAGE_NAME image was built without $AGENT_LABEL — rebuilding..."
-  $RUNTIME build -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
+  build_with_latest_agents
 fi
 
 # Create persistent volume for claude home if it doesn't exist

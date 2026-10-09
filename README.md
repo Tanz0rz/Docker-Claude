@@ -366,6 +366,12 @@ only the flagged agent would roll the other two back to their pins every time yo
 switched launchers. For the same reason, if any one release can't be fetched the
 update stops rather than building with that agent's pin.
 
+The same fetch-everything rebuild runs (minus the source pull) when a launcher
+finds the existing image predates its agent — say the first `copencode` on a
+machine whose image was built before opencode was added. Building the
+`Containerfile` pins there would quietly roll the agents already in the image
+back to whatever the pins were.
+
 If the build fails, the launcher stops there rather than starting the image that
 is still tagged. A failed rebuild would otherwise hand you the *previous* image
 with the build error already scrolled off screen — an agent missing the tool you
@@ -386,8 +392,8 @@ cclaude  # rebuilds automatically
 
 That pair is also the escape hatch when you are developing against a checkout
 `--update` won't touch: the launchers otherwise build only when the image is
-missing, so an existing `claude-code` image keeps being reused, however old it
-is. If a tool this README documents appears to be missing inside the container,
+missing or predates the launched agent, so an existing `claude-code` image keeps
+being reused, however old it is. If a tool this README documents appears to be missing inside the container,
 an image predating it is the first thing to check:
 `docker image inspect claude-code --format '{{.Created}}'`.
 

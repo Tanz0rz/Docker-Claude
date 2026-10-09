@@ -125,47 +125,27 @@ REM rebuild. All three agents share one image, so all three versions are passed:
 REM a build-arg left out falls back to its Containerfile pin, and updating one
 REM agent would roll the other two back. A failed fetch aborts for the same reason.
 REM Changed build-args bust the agent layers; any source change busts whichever
-REM layer it belongs to, further up. See :update_source at the end of this file.
+REM layer it belongs to, further up. See :update_source and :build_latest at the
+REM end of this file.
 if defined FORCE_UPDATE (
     call :update_source
-    echo Fetching latest agent versions...
-    set CLAUDE_LATEST=
-    set CODEX_LATEST=
-    set OPENCODE_LATEST=
-    for /f "delims=" %%V in ('curl -fsSL https://downloads.claude.ai/claude-code-releases/latest') do set CLAUDE_LATEST=%%V
-    for /f "delims=" %%V in ('powershell -NoProfile -Command "(Invoke-RestMethod https://registry.npmjs.org/@openai/codex/latest).version"') do set CODEX_LATEST=%%V
-    for /f "delims=" %%V in ('powershell -NoProfile -Command "(Invoke-RestMethod https://registry.npmjs.org/opencode-ai/latest).version"') do set OPENCODE_LATEST=%%V
-    if not defined CLAUDE_LATEST (
-        echo Error: could not fetch the latest Claude Code version. >&2
-        exit /b 1
-    )
-    if not defined CODEX_LATEST (
-        echo Error: could not fetch the latest Codex CLI version. >&2
-        exit /b 1
-    )
-    if not defined OPENCODE_LATEST (
-        echo Error: could not fetch the latest opencode version. >&2
-        exit /b 1
-    )
-    echo Rebuilding image with Claude Code !CLAUDE_LATEST!, Codex CLI !CODEX_LATEST!, opencode !OPENCODE_LATEST!...
-    %RUNTIME% build --pull --build-arg CLAUDE_CODE_VERSION=!CLAUDE_LATEST! --build-arg CODEX_VERSION=!CODEX_LATEST! --build-arg OPENCODE_VERSION=!OPENCODE_LATEST! -t %IMAGE_NAME% -f "%SCRIPT_DIR%\Containerfile" "%SCRIPT_DIR%"
-    if errorlevel 1 (
-        echo Error: the image build failed. >&2
-        echo Refusing to launch - the old %IMAGE_NAME% image is still tagged and would run silently. >&2
-        exit /b 1
-    )
+    call :build_latest || exit /b 1
 )
 
 REM Build if the image doesn't exist, or if it predates the requested agent: an
 REM image built from older source has no binary for it, and its entrypoint falls
 REM through to Claude Code without a word. The Containerfile labels every agent
 REM it installs, so a missing label means the image is too old for this launch.
+REM That rebuild fetches the latest release of every agent rather than building
+REM the Containerfile pins - the pins usually trail what the image already runs,
+REM and a plain rebuild would roll the existing agents back.
 set NEED_BUILD=
+set NEED_AGENT=
 %RUNTIME% image inspect %IMAGE_NAME% >nul 2>nul || set NEED_BUILD=1
 if not defined NEED_BUILD (
     %RUNTIME% image inspect --format "{{json .Config.Labels}}" %IMAGE_NAME% 2>nul | findstr /c:"docker-claude.agent.%AGENT%" >nul || (
         echo The %IMAGE_NAME% image was built without %AGENT_LABEL% - rebuilding...
-        set NEED_BUILD=1
+        set NEED_AGENT=1
     )
 )
 if defined NEED_BUILD (
@@ -176,6 +156,7 @@ if defined NEED_BUILD (
         exit /b 1
     )
 )
+if defined NEED_AGENT call :build_latest || exit /b 1
 
 REM Create persistent volume if it doesn't exist
 %RUNTIME% volume inspect %VOLUME_NAME% >nul 2>nul || (
@@ -409,6 +390,38 @@ if "!SRC_BEFORE!"=="!SRC_AFTER!" (
     echo Source: already current ^(!SRC_AFTER!^).
 ) else (
     echo Source: updated !SRC_BEFORE! -^> !SRC_AFTER!.
+)
+exit /b 0
+
+REM ---------------------------------------------------------------------------
+REM Fetch the latest release of every agent, then rebuild the image. Exits
+REM nonzero on a failed fetch or build so the caller aborts the launch.
+:build_latest
+echo Fetching latest agent versions...
+set CLAUDE_LATEST=
+set CODEX_LATEST=
+set OPENCODE_LATEST=
+for /f "delims=" %%V in ('curl -fsSL https://downloads.claude.ai/claude-code-releases/latest') do set CLAUDE_LATEST=%%V
+for /f "delims=" %%V in ('powershell -NoProfile -Command "(Invoke-RestMethod https://registry.npmjs.org/@openai/codex/latest).version"') do set CODEX_LATEST=%%V
+for /f "delims=" %%V in ('powershell -NoProfile -Command "(Invoke-RestMethod https://registry.npmjs.org/opencode-ai/latest).version"') do set OPENCODE_LATEST=%%V
+if not defined CLAUDE_LATEST (
+    echo Error: could not fetch the latest Claude Code version. >&2
+    exit /b 1
+)
+if not defined CODEX_LATEST (
+    echo Error: could not fetch the latest Codex CLI version. >&2
+    exit /b 1
+)
+if not defined OPENCODE_LATEST (
+    echo Error: could not fetch the latest opencode version. >&2
+    exit /b 1
+)
+echo Rebuilding image with Claude Code !CLAUDE_LATEST!, Codex CLI !CODEX_LATEST!, opencode !OPENCODE_LATEST!...
+%RUNTIME% build --pull --build-arg CLAUDE_CODE_VERSION=!CLAUDE_LATEST! --build-arg CODEX_VERSION=!CODEX_LATEST! --build-arg OPENCODE_VERSION=!OPENCODE_LATEST! -t %IMAGE_NAME% -f "%SCRIPT_DIR%\Containerfile" "%SCRIPT_DIR%"
+if errorlevel 1 (
+    echo Error: the image build failed. >&2
+    echo Refusing to launch - the old %IMAGE_NAME% image is still tagged and would run silently. >&2
+    exit /b 1
 )
 exit /b 0
 
