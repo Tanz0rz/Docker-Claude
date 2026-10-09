@@ -48,7 +48,7 @@ Launcher options — must come before the agent's arguments:
   --no-git     Don't share git identity/credentials for this launch
   --git        Force git access on (overrides the GIT_ACCESS env var)
   --no-mounts  Ignore all container-mounts and container-env files for this launch
-  --update     Pull the latest launcher source and agent release, then rebuild
+  --update     Pull the latest launcher source and agent releases, then rebuild
   -h, --help   Show this help
   --           Stop parsing launcher options; pass the rest to $AGENT_LABEL
 
@@ -118,7 +118,7 @@ if ! $RUNTIME info &>/dev/null; then
 fi
 
 # --update refreshes two things before rebuilding: the launcher's own source
-# tree, and the agent release pinned into the image.
+# tree, and the agent releases pinned into the image.
 #
 # The source half is the non-obvious one. The build context is $SCRIPT_DIR — the
 # checkout this script lives in, which under the installer is
@@ -168,37 +168,31 @@ update_source() {
   fi
 }
 
-# --update: refresh the source, fetch the latest agent release, then rebuild.
-# The changed build-arg busts the agent layer; any source change busts whichever
+# --update: refresh the source, fetch the latest release of every agent, then
+# rebuild. All three agents share one image, so all three versions are passed:
+# a build-arg left out falls back to its Containerfile pin, and updating one
+# agent would roll the other two back. A failed fetch aborts for the same reason.
+# Changed build-args bust the agent layers; any source change busts whichever
 # layer it belongs to, further up.
+npm_latest() {
+  curl -fsSL "https://registry.npmjs.org/$1/latest" \
+    | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4
+}
 if [ "$FORCE_UPDATE" = true ]; then
   update_source
-  if [ "$AGENT" = "opencode" ]; then
-    echo "Fetching latest opencode version..."
-    LATEST_VERSION="$(curl -fsSL https://registry.npmjs.org/opencode-ai/latest \
-      | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)" \
-      || { echo "Error: could not fetch the latest opencode version." >&2; exit 1; }
-    [ -n "$LATEST_VERSION" ] || { echo "Error: could not parse the latest opencode version." >&2; exit 1; }
-    echo "Rebuilding image with opencode $LATEST_VERSION..."
-    $RUNTIME build --pull --build-arg "OPENCODE_VERSION=$LATEST_VERSION" \
-      -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
-  elif [ "$AGENT" = "codex" ]; then
-    echo "Fetching latest Codex CLI version..."
-    LATEST_VERSION="$(curl -fsSL https://registry.npmjs.org/@openai/codex/latest \
-      | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)" \
-      || { echo "Error: could not fetch the latest Codex CLI version." >&2; exit 1; }
-    [ -n "$LATEST_VERSION" ] || { echo "Error: could not parse the latest Codex CLI version." >&2; exit 1; }
-    echo "Rebuilding image with Codex CLI $LATEST_VERSION..."
-    $RUNTIME build --pull --build-arg "CODEX_VERSION=$LATEST_VERSION" \
-      -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
-  else
-    echo "Fetching latest Claude Code version..."
-    LATEST_VERSION="$(curl -fsSL https://downloads.claude.ai/claude-code-releases/latest)" \
-      || { echo "Error: could not fetch the latest Claude Code version." >&2; exit 1; }
-    echo "Rebuilding image with Claude Code $LATEST_VERSION..."
-    $RUNTIME build --pull --build-arg "CLAUDE_CODE_VERSION=$LATEST_VERSION" \
-      -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
-  fi
+  echo "Fetching latest agent versions..."
+  CLAUDE_LATEST="$(curl -fsSL https://downloads.claude.ai/claude-code-releases/latest)" || CLAUDE_LATEST=""
+  CODEX_LATEST="$(npm_latest @openai/codex)" || CODEX_LATEST=""
+  OPENCODE_LATEST="$(npm_latest opencode-ai)" || OPENCODE_LATEST=""
+  [ -n "$CLAUDE_LATEST" ]   || { echo "Error: could not fetch the latest Claude Code version." >&2; exit 1; }
+  [ -n "$CODEX_LATEST" ]    || { echo "Error: could not fetch the latest Codex CLI version." >&2; exit 1; }
+  [ -n "$OPENCODE_LATEST" ] || { echo "Error: could not fetch the latest opencode version." >&2; exit 1; }
+  echo "Rebuilding image with Claude Code $CLAUDE_LATEST, Codex CLI $CODEX_LATEST, opencode $OPENCODE_LATEST..."
+  $RUNTIME build --pull \
+    --build-arg "CLAUDE_CODE_VERSION=$CLAUDE_LATEST" \
+    --build-arg "CODEX_VERSION=$CODEX_LATEST" \
+    --build-arg "OPENCODE_VERSION=$OPENCODE_LATEST" \
+    -t "$IMAGE_NAME" -f "$SCRIPT_DIR/Containerfile" "$SCRIPT_DIR"
 fi
 
 # Build if the image doesn't exist, or if it predates the requested agent: an
@@ -503,7 +497,7 @@ if [ "$EXTRA_MOUNTS" = true ]; then
     for e in "${EXTRA_ENV_LINES[@]:1}"; do echo "               $e"; done
   fi
 fi
-echo "  Update:      $LAUNCHER --update   pulls the latest source + release, rebuilds"
+echo "  Update:      $LAUNCHER --update   pulls the latest source + releases, rebuilds"
 echo "──────────────────────────────────────────────────────────────"
 
 $RUNTIME run --rm -it \

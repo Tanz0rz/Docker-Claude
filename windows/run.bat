@@ -61,7 +61,7 @@ if defined SHOW_HELP (
     echo   --no-git     Don't share git identity/credentials for this launch
     echo   --git        Force git access on ^(overrides the GIT_ACCESS env var^)
     echo   --no-mounts  Ignore all container-mounts and container-env files for this launch
-    echo   --update     Pull the latest launcher source and agent release, then rebuild
+    echo   --update     Pull the latest launcher source and agent releases, then rebuild
     echo   -h, --help   Show this help
     echo   --           Stop parsing launcher options; pass the rest to %AGENT_LABEL%
     echo(
@@ -120,56 +120,39 @@ REM Check that the daemon is actually reachable
     exit /b 1
 )
 
-REM --update: refresh the source, fetch the latest agent release, then rebuild.
-REM The changed build-arg busts the agent layer; any source change busts whichever
+REM --update: refresh the source, fetch the latest release of every agent, then
+REM rebuild. All three agents share one image, so all three versions are passed:
+REM a build-arg left out falls back to its Containerfile pin, and updating one
+REM agent would roll the other two back. A failed fetch aborts for the same reason.
+REM Changed build-args bust the agent layers; any source change busts whichever
 REM layer it belongs to, further up. See :update_source at the end of this file.
 if defined FORCE_UPDATE (
     call :update_source
-    if /i "%AGENT%"=="opencode" (
-        echo Fetching latest opencode version...
-        set LATEST_VERSION=
-        for /f "delims=" %%V in ('powershell -NoProfile -Command "(Invoke-RestMethod https://registry.npmjs.org/opencode-ai/latest).version"') do set LATEST_VERSION=%%V
-        if not defined LATEST_VERSION (
-            echo Error: could not fetch the latest opencode version. >&2
-            exit /b 1
-        )
-        echo Rebuilding image with opencode !LATEST_VERSION!...
-        %RUNTIME% build --pull --build-arg OPENCODE_VERSION=!LATEST_VERSION! -t %IMAGE_NAME% -f "%SCRIPT_DIR%\Containerfile" "%SCRIPT_DIR%"
-        if errorlevel 1 (
-            echo Error: the image build failed. >&2
-            echo Refusing to launch - the old %IMAGE_NAME% image is still tagged and would run silently. >&2
-            exit /b 1
-        )
-    ) else if /i "%AGENT%"=="codex" (
-        echo Fetching latest Codex CLI version...
-        set LATEST_VERSION=
-        for /f "delims=" %%V in ('powershell -NoProfile -Command "(Invoke-RestMethod https://registry.npmjs.org/@openai/codex/latest).version"') do set LATEST_VERSION=%%V
-        if not defined LATEST_VERSION (
-            echo Error: could not fetch the latest Codex CLI version. >&2
-            exit /b 1
-        )
-        echo Rebuilding image with Codex CLI !LATEST_VERSION!...
-        %RUNTIME% build --pull --build-arg CODEX_VERSION=!LATEST_VERSION! -t %IMAGE_NAME% -f "%SCRIPT_DIR%\Containerfile" "%SCRIPT_DIR%"
-        if errorlevel 1 (
-            echo Error: the image build failed. >&2
-            echo Refusing to launch - the old %IMAGE_NAME% image is still tagged and would run silently. >&2
-            exit /b 1
-        )
-    ) else (
-        echo Fetching latest Claude Code version...
-        set LATEST_VERSION=
-        for /f "delims=" %%V in ('curl -fsSL https://downloads.claude.ai/claude-code-releases/latest') do set LATEST_VERSION=%%V
-        if not defined LATEST_VERSION (
-            echo Error: could not fetch the latest Claude Code version. >&2
-            exit /b 1
-        )
-        echo Rebuilding image with Claude Code !LATEST_VERSION!...
-        %RUNTIME% build --pull --build-arg CLAUDE_CODE_VERSION=!LATEST_VERSION! -t %IMAGE_NAME% -f "%SCRIPT_DIR%\Containerfile" "%SCRIPT_DIR%"
-        if errorlevel 1 (
-            echo Error: the image build failed. >&2
-            echo Refusing to launch - the old %IMAGE_NAME% image is still tagged and would run silently. >&2
-            exit /b 1
-        )
+    echo Fetching latest agent versions...
+    set CLAUDE_LATEST=
+    set CODEX_LATEST=
+    set OPENCODE_LATEST=
+    for /f "delims=" %%V in ('curl -fsSL https://downloads.claude.ai/claude-code-releases/latest') do set CLAUDE_LATEST=%%V
+    for /f "delims=" %%V in ('powershell -NoProfile -Command "(Invoke-RestMethod https://registry.npmjs.org/@openai/codex/latest).version"') do set CODEX_LATEST=%%V
+    for /f "delims=" %%V in ('powershell -NoProfile -Command "(Invoke-RestMethod https://registry.npmjs.org/opencode-ai/latest).version"') do set OPENCODE_LATEST=%%V
+    if not defined CLAUDE_LATEST (
+        echo Error: could not fetch the latest Claude Code version. >&2
+        exit /b 1
+    )
+    if not defined CODEX_LATEST (
+        echo Error: could not fetch the latest Codex CLI version. >&2
+        exit /b 1
+    )
+    if not defined OPENCODE_LATEST (
+        echo Error: could not fetch the latest opencode version. >&2
+        exit /b 1
+    )
+    echo Rebuilding image with Claude Code !CLAUDE_LATEST!, Codex CLI !CODEX_LATEST!, opencode !OPENCODE_LATEST!...
+    %RUNTIME% build --pull --build-arg CLAUDE_CODE_VERSION=!CLAUDE_LATEST! --build-arg CODEX_VERSION=!CODEX_LATEST! --build-arg OPENCODE_VERSION=!OPENCODE_LATEST! -t %IMAGE_NAME% -f "%SCRIPT_DIR%\Containerfile" "%SCRIPT_DIR%"
+    if errorlevel 1 (
+        echo Error: the image build failed. >&2
+        echo Refusing to launch - the old %IMAGE_NAME% image is still tagged and would run silently. >&2
+        exit /b 1
     )
 )
 
@@ -366,7 +349,7 @@ if defined EXTRA_MOUNTS_ON (
         )
     )
 )
-echo   Update:      %LAUNCHER% --update   pulls the latest source + release, rebuilds
+echo   Update:      %LAUNCHER% --update   pulls the latest source + releases, rebuilds
 echo --------------------------------------------------------------
 
 %RUNTIME% run --rm -it --network=bridge -w "%WORKSPACE_PATH%" %RUNTIME_FLAGS% %ENV_FLAGS% %HOST_MOUNTS% -v %VOLUME_NAME%:/home/claude -v "%cd%:%WORKSPACE_PATH%" %IMAGE_NAME% !RUN_ARGS!

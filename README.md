@@ -30,7 +30,7 @@ ccodex         # launch the Codex CLI
 copencode      # launch opencode
 ```
 
-The first launch builds the image and prompts you to `/login`. After that, `cclaude --update` / `ccodex --update` / `copencode --update` keeps everything current — it pulls the latest launcher source *and* the latest agent release, then rebuilds. Re-running the installer is only needed if the launcher shims themselves change.
+The first launch builds the image and prompts you to `/login`. After that, `cclaude --update` / `ccodex --update` / `copencode --update` keeps everything current — it pulls the latest launcher source *and* the latest release of every agent, then rebuilds. Re-running the installer is only needed if the launcher shims themselves change.
 
 ### Prerequisites per OS
 
@@ -66,7 +66,7 @@ flags.
 | `--no-git` | Withhold git identity and credentials for this launch (same as `GIT_ACCESS=0`). |
 | `--git` | Force git access on for this launch, overriding the `GIT_ACCESS` env var. |
 | `--no-mounts` | Ignore every container-mounts and container-env file for this launch (same as `EXTRA_MOUNTS=0`). See [Bind a host directory in](#3-bind-a-host-directory-in-per-project-no-rebuild). |
-| `--update` | Pull the latest launcher source and agent release, rebuild the image, then launch. |
+| `--update` | Pull the latest launcher source and agent releases, rebuild the image, then launch. |
 | `-h`, `--help` | Show the launcher's help. |
 | `--` | Stop parsing launcher options; pass everything after straight to the agent. |
 
@@ -339,12 +339,11 @@ The tree is mounted as a **single read-only mount**, with `haxelib` layered back
 ## Updating
 
 All three CLIs are baked into the image, pinned via build args in the `Containerfile`
-(`CLAUDE_CODE_VERSION`, `CODEX_VERSION` and `OPENCODE_VERSION`). One command updates everything:
+(`CLAUDE_CODE_VERSION`, `CODEX_VERSION` and `OPENCODE_VERSION`). One command updates everything,
+from whichever launcher you run it:
 
 ```
-cclaude --update   # rebuild with the latest Claude Code
-ccodex --update    # rebuild with the latest Codex CLI
-copencode --update # rebuild with the latest opencode
+cclaude --update   # same as ccodex --update or copencode --update
 ```
 
 `--update` does two things before rebuilding, and the first one is easy to miss:
@@ -355,16 +354,17 @@ copencode --update # rebuild with the latest opencode
    *not* any clone you happen to be editing elsewhere. This is what carries
    changes to the `Containerfile` and `entrypoint.sh` — new tools, bumped
    versions, environment fixes — into the image.
-2. **Fetches the latest release of that agent** and pins it into the build.
+2. **Fetches the latest release of every agent** and pins all three into the build.
 
 Then it rebuilds and launches as usual. (The `--update` flag is consumed by the
 launcher; all other arguments are passed through to the agent. Because all the
 agents live in one image, any `--update` rebuilds the whole thing.)
 
-Only the flagged agent's version is bumped, though: `cclaude --update` moves
-`CLAUDE_CODE_VERSION` to the latest release and leaves the others at whatever the
-`Containerfile` pins, and likewise for `ccodex --update` and
-`copencode --update`. Run each to move each.
+All three versions are bumped together, whichever launcher you run it from. A
+build arg left out of the build falls back to its `Containerfile` pin, so bumping
+only the flagged agent would roll the other two back to their pins every time you
+switched launchers. For the same reason, if any one release can't be fetched the
+update stops rather than building with that agent's pin.
 
 If the build fails, the launcher stops there rather than starting the image that
 is still tagged. A failed rebuild would otherwise hand you the *previous* image

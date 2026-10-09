@@ -47,7 +47,7 @@ prints the exact line to add `~/.local/bin` to your PATH so you can add it
 yourself. (Prefer it automated? Re-run with `--modify-path`, or set
 `DOCKER_CLAUDE_MODIFY_PATH=1`.) Re-run the command any time to reinstall the
 launchers — day to day you won't need to, because `cclaude --update` pulls the
-latest image sources and agent release itself (see
+latest image sources and agent releases itself (see
 [Updating](../README.md#updating)).
 
 ## Usage
